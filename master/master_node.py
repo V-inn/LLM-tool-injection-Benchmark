@@ -64,7 +64,6 @@ async def worker_task_consumer(worker_ip, task_queue, results_matrix):
             
             if not initial_response["message"].get("tool_calls"):
                 results_matrix[matrix_key]["failure_no_tool_called"] += 1
-                task_queue.task_done()
                 print(f"[{worker_ip}] Finalizou teste: {matrix_key} -> failure_no_tool_called")
                 continue
 
@@ -127,6 +126,38 @@ async def worker_task_consumer(worker_ip, task_queue, results_matrix):
         finally:
             task_queue.task_done()
 
+# --- 2.5 A Fila Assíncrona do Juiz (Avaliação Distribuída) ---
+async def judge_worker_consumer(worker_ip, judge_queue, results_matrix, judge_model):
+    from llm_judge import LLMJudge
+    judge = LLMJudge(judge_model=judge_model, host=f"http://{worker_ip}:11434")
+    
+    while True:
+        try:
+            # Pega o próximo texto a ser julgado
+            task = judge_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+            
+        matrix_key, text = task
+        
+        try:
+            eval_result = await judge.analyze_cognitive_state(text)
+            
+            # Atualiza os dados de volta na matriz (Asyncio em Python é seguro para isso)
+            if eval_result["is_coerced"]:
+                results_matrix[matrix_key]["coerced_violations"] += 1
+                
+            results_matrix[matrix_key]["judge_reasoning"].append(eval_result["reasoning"])
+            
+            print(f"[{worker_ip}] Julgou com sucesso uma inferência de: {matrix_key}")
+            
+        except Exception as e:
+            print(f"[!] Erro no Juiz do nó {worker_ip}. Devolvendo para a fila...")
+            judge_queue.put_nowait(task)
+            await asyncio.sleep(2)
+        finally:
+            judge_queue.task_done()
+
 # --- 3. The Master Orchestrator ---
 async def main(args):
     cluster_workers = discover_workers(timeout=args.timeout)
@@ -182,32 +213,46 @@ async def main(args):
         
     await asyncio.gather(*consumer_tasks)
 
-    # --- BATCH EVALUATION PHASE (LLM-AS-A-JUDGE) ---
+    # --- BATCH EVALUATION PHASE (DISTRIBUTED LLM-AS-A-JUDGE) ---
     if args.use_judge:
         print("\n=========================================")
-        print(f"[*] INITIATING BATCH JUDGE EVALUATION ({args.judge_model})")
+        print(f"[*] INICIANDO JULGAMENTO DISTRIBUÍDO ({args.judge_model})")
         print("=========================================")
         
-        from llm_judge import LLMJudge
-        judge_ip = cluster_workers[0]
-        judge = LLMJudge(judge_model=args.judge_model, host=f"http://{judge_ip}:11434")
-        
-        for matrix_key, metrics in results_matrix.items():
-            print(f"  -> Evaluating texts for: {matrix_key}")
-            
-            coerced_count = 0
+        # 1. Preparar a matriz para receber os julgamentos
+        for metrics in results_matrix.values():
+            metrics["coerced_violations"] = 0
             metrics["judge_reasoning"] = []
             
+        # 2. Criar a fila de textos para julgar
+        judge_queue = asyncio.Queue()
+        total_judgments = 0
+        
+        for matrix_key, metrics in results_matrix.items():
             for text in metrics["raw_texts"]:
-                eval_result = await judge.analyze_cognitive_state(text)
-                if eval_result["is_coerced"]:
-                    coerced_count += 1
-                metrics["judge_reasoning"].append(eval_result["reasoning"])
+                judge_queue.put_nowait((matrix_key, text))
+                total_judgments += 1
+                
+        print(f"[*] Fila do Juiz criada com {total_judgments} textos. Distribuindo...")
+
+        # 3. Disparar os Juízes em todos os nós disponíveis
+        judge_tasks = []
+        for worker_ip in cluster_workers:
+            task = asyncio.create_task(
+                judge_worker_consumer(worker_ip, judge_queue, results_matrix, args.judge_model)
+            )
+            judge_tasks.append(task)
             
-            metrics["coerced_violations"] = coerced_count
-            del metrics["raw_texts"] # Clean up raw text to keep JSON manageable
+        await asyncio.gather(*judge_tasks)
+        
+        # 4. Limpeza da memória (deleta os textos brutos)
+        for metrics in results_matrix.values():
+            del metrics["raw_texts"]
+            
+        print("[+] Julgamento distribuído concluído!")
+            
     else:
-        print("\n[*] Judge evaluation skipped (--use-judge not provided).")
+        print("\n[*] Avaliação do Juiz ignorada (--use-judge não foi passado).")
         for metrics in results_matrix.values():
             if "raw_texts" in metrics:
                 del metrics["raw_texts"]

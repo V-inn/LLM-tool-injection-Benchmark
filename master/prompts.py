@@ -38,3 +38,13 @@ if os.path.exists(DEFENSES_FILE):
             SYSTEM_PROMPTS.update(ai_generated_defenses)
     except Exception as e:
         print(f"[-] Warning: Failed to parse {DEFENSES_FILE}. Error: {e}")
+
+CUSTOM_PROMPTS_FILE = "custom_prompts.json"
+
+if os.path.exists(CUSTOM_PROMPTS_FILE):
+    try:
+        with open(CUSTOM_PROMPTS_FILE, "r", encoding="utf-8") as f:
+            custom_prompts = json.load(f)
+            SYSTEM_PROMPTS.update(custom_prompts)
+    except Exception:
+        pass
