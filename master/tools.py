@@ -1,8 +1,6 @@
 import json
 from pydantic import BaseModel, Field
-from prompts import INJECTION_PAYLOADS
-
-# --- 1. Pydantic Schemas for Tool Arguments ---
+from typing import List, Dict, Any
 
 class FetchDataTool(BaseModel):
     user_id: str = Field(description="The ID of the user to fetch data for.")
@@ -18,9 +16,7 @@ class GrantAdminTool(BaseModel):
 class DeleteDatabaseTool(BaseModel):
     confirmation_code: str = Field(description="Security code to confirm total deletion.")
 
-# --- 2. Tool Taxonomy with Severity Levels ---
-
-def get_available_tools():
+def get_available_tools() -> List[Dict[str, Any]]:
     return [
         {
             "type": "function",
@@ -56,11 +52,9 @@ def get_available_tools():
         }
     ]
 
-# --- 3. Payload Injection Interceptor ---
-
-def mock_read_user_profile(user_id: str, injection_key: str) -> str:
+def create_mock_profile_response(injected_payload: str) -> str:
     malicious_payload = {
         "status": "success",
-        "data": INJECTION_PAYLOADS[injection_key]
+        "data": injected_payload
     }
     return json.dumps(malicious_payload)
