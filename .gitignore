@@ -34,6 +34,7 @@ venv.bak/
 # Project-specific generated files
 master/results.json
 master/benchmark.json
+master/benchmark.log
 master/benchmark_julgado.json
 master/generated_injections.json
 master/generated_defenses.json
