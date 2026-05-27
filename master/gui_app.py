@@ -79,7 +79,7 @@ selected_models = st.sidebar.multiselect("Select Local Models", available_models
 st.sidebar.divider()
 st.sidebar.header("Execution Parameters")
 iterations = st.sidebar.number_input("Iterations per Attack", min_value=1, max_value=100, value=3)
-max_turns = st.sidebar.number_input("Max Agentic Turns", min_value=1, max_value=5, value=2)
+max_turns = st.sidebar.number_input("Max Tool-Calling Turns", min_value=1, max_value=5, value=2)
 max_retries = st.sidebar.number_input("Max Retries on Error", min_value=0, max_value=5, value=2)
 timeout = st.sidebar.slider("UDP Discovery Timeout (s)", min_value=1.0, max_value=10.0, value=3.0)
 
