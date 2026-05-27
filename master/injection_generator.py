@@ -44,16 +44,26 @@ async def generate_with_gemini(model_name: str, prompt: str) -> str:
     # Initialize the new genai Client. It automatically picks up GEMINI_API_KEY from the environment.
     client = genai.Client()
     
-    # Execute async call using the new SDK structure
-    response = await client.aio.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction="You are an automated payload generator. You must output strictly valid JSON without markdown blocks.",
-            response_mime_type="application/json",
-        )
-    )
-    return response.text
+    max_retries = 3
+    base_delay = 2
+    for attempt in range(max_retries):
+        try:
+            # Execute async call using the new SDK structure
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction="You are an automated payload generator. You must output strictly valid JSON without markdown blocks.",
+                    response_mime_type="application/json",
+                )
+            )
+            return response.text
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            print(f"[-] Gemini API error: {e}. Retrying in {delay}s...")
+            await asyncio.sleep(delay)
 
 # --- 3. The Generator Core ---
 async def generate_injections(attacker_model: str, num_payloads: int, output_file: str):

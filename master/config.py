@@ -87,6 +87,11 @@ class BenchmarkConfig:
     iterations:           int   = 5
     concurrency_per_node: int   = 2
     max_retries:          int   = 3
+    max_turns:            int   = 1
+
+    # Network
+    ollama_port:          int   = 11434
+    udp_discovery_port:   int   = 5005
 
     # Discovery
     timeout:              float = 5.0

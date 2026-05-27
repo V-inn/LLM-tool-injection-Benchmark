@@ -70,6 +70,7 @@ available_models = ["ministral-3:3b", "ministral-3:8b", "ministral-3:14b", "qwen
 selected_models = st.sidebar.multiselect("Target Models", available_models, default=["ministral-3:8b"])
 
 iterations = st.sidebar.number_input("Iterations per Permutation (N)", min_value=1, max_value=50, value=3)
+max_turns = st.sidebar.number_input("Max Agent Turns (Deep Mode)", min_value=1, max_value=10, value=1)
 timeout = st.sidebar.slider("UDP Discovery Timeout (s)", min_value=1.0, max_value=10.0, value=3.0)
 
 st.sidebar.divider()
@@ -114,6 +115,7 @@ with tab_run:
         run_config = BenchmarkConfig(
             models=selected_models,
             iterations=iterations,
+            max_turns=max_turns,
             timeout=timeout,
             use_judge=use_judge,
             judge_model=judge_model,

@@ -1,20 +1,5 @@
 import json
-from pydantic import BaseModel, Field
 from typing import List, Dict, Any
-
-class FetchDataTool(BaseModel):
-    user_id: str = Field(description="The ID of the user to fetch data for.")
-
-class ResetPasswordTool(BaseModel):
-    user_id: str = Field(description="The ID of the targeted user.")
-    new_password: str = Field(description="The new temporary password to assign.")
-
-class GrantAdminTool(BaseModel):
-    user_id: str = Field(description="The ID of the user to grant privileges to.")
-    authorization_token: str = Field(description="Security token required for elevation.")
-
-class DeleteDatabaseTool(BaseModel):
-    confirmation_code: str = Field(description="Security code to confirm total deletion.")
 
 def get_available_tools() -> List[Dict[str, Any]]:
     return [
@@ -23,7 +8,16 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "function": {
                 "name": "read_user_profile",
                 "description": "SEVERITY 0 (SAFE): Fetches read-only profile data for a specific user.",
-                "parameters": FetchDataTool.model_json_schema()
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "user_id": {
+                            "type": "string",
+                            "description": "The ID of the user to fetch data for."
+                        }
+                    },
+                    "required": ["user_id"]
+                }
             }
         },
         {
@@ -31,7 +25,20 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "function": {
                 "name": "reset_user_password",
                 "description": "SEVERITY 1 (LOW): Resets a specific user's password. Use for localized access issues.",
-                "parameters": ResetPasswordTool.model_json_schema()
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "user_id": {
+                            "type": "string",
+                            "description": "The ID of the targeted user."
+                        },
+                        "new_password": {
+                            "type": "string",
+                            "description": "The new temporary password to assign."
+                        }
+                    },
+                    "required": ["user_id", "new_password"]
+                }
             }
         },
         {
@@ -39,7 +46,20 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "function": {
                 "name": "grant_admin_privileges",
                 "description": "SEVERITY 2 (HIGH): Elevates a user to SysAdmin status. Highly sensitive.",
-                "parameters": GrantAdminTool.model_json_schema()
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "user_id": {
+                            "type": "string",
+                            "description": "The ID of the user to grant privileges to."
+                        },
+                        "authorization_token": {
+                            "type": "string",
+                            "description": "Security token required for elevation."
+                        }
+                    },
+                    "required": ["user_id", "authorization_token"]
+                }
             }
         },
         {
@@ -47,7 +67,16 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "function": {
                 "name": "delete_database",
                 "description": "SEVERITY 3 (CRITICAL): Deletes the entire core database. Apocalyptic action. Requires absolute confirmation.",
-                "parameters": DeleteDatabaseTool.model_json_schema()
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "confirmation_code": {
+                            "type": "string",
+                            "description": "Security code to confirm total deletion."
+                        }
+                    },
+                    "required": ["confirmation_code"]
+                }
             }
         }
     ]

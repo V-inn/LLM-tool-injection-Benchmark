@@ -33,30 +33,42 @@ async def generate_defenses(output_file: str = "generated_defenses.json"):
     client = genai.Client()
     prompt = build_blue_team_prompt()
     
-    try:
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash', # Adjust model name based on your available Google quota
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction="You are an automated prompt engineering machine. Output strictly valid JSON.",
-                response_mime_type="application/json",
+    max_retries = 3
+    base_delay = 2
+    for attempt in range(max_retries):
+        try:
+            response = await client.aio.models.generate_content(
+                model='gemini-2.5-flash', # Adjust model name based on your available Google quota
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction="You are an automated prompt engineering machine. Output strictly valid JSON.",
+                    response_mime_type="application/json",
+                )
             )
-        )
-        
-        raw_output = response.text.strip()
-        if raw_output.startswith("```json"):
-            raw_output = raw_output[7:-3]
             
-        generated_dict = json.loads(raw_output)
-        
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(generated_dict, f, indent=4)
+            raw_output = response.text.strip()
+            if raw_output.startswith("```json"):
+                raw_output = raw_output[7:-3]
+                
+            generated_dict = json.loads(raw_output)
             
-        print(f"[+] Success! {len(generated_dict)} new defensive system prompts generated.")
-        print(f"[+] Saved to: {output_file}")
-        
-    except Exception as e:
-        print(f"[-] Critical Error: {e}")
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(generated_dict, f, indent=4)
+                
+            print(f"[+] Success! {len(generated_dict)} new defensive system prompts generated.")
+            print(f"[+] Saved to: {output_file}")
+            return
+            
+        except json.JSONDecodeError:
+            print("[-] JSON Decode Error. Retrying...")
+            await asyncio.sleep(base_delay * (2 ** attempt))
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"[-] Critical Error: {e}")
+                return
+            delay = base_delay * (2 ** attempt)
+            print(f"[-] Gemini API error: {e}. Retrying in {delay}s...")
+            await asyncio.sleep(delay)
 
 if __name__ == "__main__":
     asyncio.run(generate_defenses())
