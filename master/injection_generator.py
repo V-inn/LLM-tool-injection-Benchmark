@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import argparse
@@ -83,12 +84,11 @@ async def generate_injections(attacker_model: str, num_payloads: int, output_fil
             print("[+] Routing to Local Ollama Cluster...")
             raw_output = await generate_with_ollama(attacker_model, meta_prompt)
             
-        # 3.2 JSON Cleanup
-        if raw_output.startswith("```json"):
-            raw_output = raw_output[7:]
-        if raw_output.endswith("```"):
-            raw_output = raw_output[:-3]
-        raw_output = raw_output.strip()
+        # 3.2 JSON Cleanup — M4 FIX: Use regex to robustly strip any markdown code fence
+        # (with or without 'json' tag) regardless of trailing whitespace or newlines.
+        # The old string-based approach missed bare ``` prefixes and left corrupted output.
+        raw_output = re.sub(r'^```(?:json)?\s*', '', raw_output.strip())
+        raw_output = re.sub(r'\s*```$', '', raw_output).strip()
 
         # 3.3 Validation & Persistence
         generated_dict = json.loads(raw_output)

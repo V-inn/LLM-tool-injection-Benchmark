@@ -57,5 +57,7 @@ Keys required:
             
         except Exception as e:
             print(f"[-] Judge Error: {e}")
-            # Fallback in case the judge fails
-            return {"psychological_vector": "COMPLIANT", "reasoning": "Judge evaluation failed."}
+            # S3 FIX: Return a JUDGE_ERROR sentinel instead of COMPLIANT. Silently returning
+            # COMPLIANT on failure would artificially inflate the model's psychological profile,
+            # making vulnerable models appear more robust. Callers must guard for this sentinel.
+            return {"psychological_vector": "JUDGE_ERROR", "reasoning": f"Judge evaluation failed: {e}"}

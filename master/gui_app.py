@@ -19,8 +19,16 @@ def get_available_local_models():
     """Fetches the list of installed models directly from the local Ollama server."""
     try:
         models_dict = ollama.list()
-        # The Ollama API returns a dictionary with a 'models' key containing a list of objects
-        return [model['model'] for model in models_dict.get('models', [])]
+        # M3 FIX: Ollama SDK >=0.4 returns Model objects (attribute access), older versions
+        # return plain dicts (subscript access). Handle both to avoid TypeError.
+        raw_models = models_dict.get('models', []) if isinstance(models_dict, dict) else getattr(models_dict, 'models', [])
+        result = []
+        for m in raw_models:
+            try:
+                result.append(m['model'])        # old SDK: dict access
+            except (TypeError, KeyError):
+                result.append(getattr(m, 'model', str(m)))  # new SDK: object access
+        return result
     except Exception as e:
         st.sidebar.error(f"Failed to connect to Ollama: {e}")
         # Fallback list in case the server is down
@@ -172,6 +180,8 @@ with tab_run:
         
         run_config.to_json(TEMP_CONFIG_FILE)
         
+        # Load prompts once here so we can accurately compute total_inferences
+        # without a second independent call in master_node.py diverging on file state.
         system_prompts, injection_payloads = load_all_prompts(
             use_custom=use_custom,
             use_gen_inj=use_gen_inj,
@@ -379,8 +389,11 @@ with tab_results:
             # Aggregate data by Model and Defense
             agg_df = df.groupby(["Model", "Defense"]).sum().reset_index()
             
-            # 2. Pandas Vectorized Sum
-            sum_cols = ["Compliant", "Severity 1", "Severity 2", "Severity 3", "Confusion", "Failures", "Authority Bias", "Urgency Panic", "Instruction Amnesia"]
+            # Sum only the primary outcome columns. Psychological vectors (Authority Bias,
+            # Urgency Panic, Instruction Amnesia) are secondary judge annotations layered
+            # on top of existing violations — including them would double-count inferences
+            # and inflate the denominator, causing Immunity/Fail rates to be understated.
+            sum_cols = ["Compliant", "Severity 1", "Severity 2", "Severity 3", "Confusion", "Failures"]
             agg_df["Total Inferences"] = agg_df[sum_cols].sum(axis=1)
             
             # Prevent division by zero
@@ -396,8 +409,12 @@ with tab_results:
             agg_df["Amnesia Rate (%)"] = (agg_df["Instruction Amnesia"] / safe_totals) * 100
             
             # KPI Cards
-            global_immunity = (agg_df["Compliant"].sum() / safe_totals.sum()) * 100
-            total_tests = safe_totals.sum()
+            # Use the real Total Inferences sum, guarded against the zero-row edge case.
+            # Avoid safe_totals.sum() which inflates the denominator by 1 for each row
+            # that had zero inferences (replacing 0→1 per-row, not globally).
+            real_total = agg_df["Total Inferences"].sum()
+            global_immunity = (agg_df["Compliant"].sum() / max(real_total, 1)) * 100
+            total_tests = real_total
             critical_fails = agg_df["Severity 3"].sum()
             
             kc1, kc2, kc3 = st.columns(3)

@@ -1,3 +1,4 @@
+import re
 import json
 import asyncio
 from google import genai
@@ -47,8 +48,10 @@ async def generate_defenses(output_file: str = "generated_defenses.json"):
             )
             
             raw_output = response.text.strip()
-            if raw_output.startswith("```json"):
-                raw_output = raw_output[7:-3]
+            # C3 FIX: Replace blind [7:-3] slice (corrupts valid non-fenced JSON)
+            # with regex that only strips actual markdown fences.
+            raw_output = re.sub(r'^```(?:json)?\s*', '', raw_output)
+            raw_output = re.sub(r'\s*```$', '', raw_output).strip()
                 
             generated_dict = json.loads(raw_output)
             

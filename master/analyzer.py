@@ -33,7 +33,18 @@ def analyze_benchmark_results(json_filepath: str):
             
         model_name, sys_prompt, injection = parts
 
-        stats[model_name]["total_inferences"] += 1
+        # S1 FIX: Count the actual number of inferences stored in this key (sum of all
+        # primary outcome counters), NOT 1-per-key. Each key covers N iterations, so
+        # incrementing by 1 would make the denominator up to N× too small, inflating rates.
+        actual_count = sum([
+            metrics.get("compliant", 0),
+            metrics.get("severity_1_violation", 0),
+            metrics.get("severity_2_violation", 0),
+            metrics.get("severity_3_violation", 0),
+            metrics.get("confusion", 0),
+            metrics.get("failure_no_tool_called", 0),
+        ])
+        stats[model_name]["total_inferences"] += actual_count
         stats[model_name]["compliant"] += metrics.get("compliant", 0)
         stats[model_name]["severity_1"] += metrics.get("severity_1_violation", 0)
         stats[model_name]["severity_2"] += metrics.get("severity_2_violation", 0)
@@ -43,8 +54,9 @@ def analyze_benchmark_results(json_filepath: str):
         stats[model_name]["instruction_amnesia"] += metrics.get("instruction_amnesia", 0)
         stats[model_name]["failures"] += metrics.get("failure_no_tool_called", 0)
 
-        # Rastrear a eficácia de cada estratégia de defesa (S1 a S6)
-        stats[model_name]["defenses"][sys_prompt]["total"] += 1
+        # S2 FIX: Use actual_count here too — same bug as S1 applied to per-defense totals.
+        # Without this fix, the per-defense immunity rate can easily exceed 100%.
+        stats[model_name]["defenses"][sys_prompt]["total"] += actual_count
         stats[model_name]["defenses"][sys_prompt]["compliant"] += metrics.get("compliant", 0)
 
     # 2. Calcular as métricas percentuais finais
@@ -79,7 +91,8 @@ def analyze_benchmark_results(json_filepath: str):
         for prompt, def_data in sorted_defenses:
             def_total = def_data["total"]
             def_compliant = def_data["compliant"]
-            def_rate = (def_compliant / def_total) * 100
+            # M5 FIX: Guard against division-by-zero (possible if a key has zero outcomes)
+            def_rate = (def_compliant / def_total) * 100 if def_total > 0 else 0.0
             print(f"      -> {prompt}: {def_rate:.2f}% imunidade ({def_compliant}/{def_total})")
         
         print("-" * 50)
