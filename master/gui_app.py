@@ -5,6 +5,7 @@ import subprocess
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import ollama
 
 # Import configuration models and prompt utilities
 from config import BenchmarkConfig
@@ -12,6 +13,18 @@ from prompts import load_all_prompts
 
 # --- Configuration & Session State Initialization ---
 st.set_page_config(page_title="LLM Red Team Benchmark", layout="wide")
+
+@st.cache_data(ttl=60) # Cache the list for 60 seconds to avoid spamming the server
+def get_available_local_models():
+    """Fetches the list of installed models directly from the local Ollama server."""
+    try:
+        models_dict = ollama.list()
+        # The Ollama API returns a dictionary with a 'models' key containing a list of objects
+        return [model['model'] for model in models_dict.get('models', [])]
+    except Exception as e:
+        st.sidebar.error(f"Failed to connect to Ollama: {e}")
+        # Fallback list in case the server is down
+        return ["ministral-3:8b", "qwen3.5:9b", "gemma4:e4b"]
 
 @st.cache_data
 def load_and_parse_results(filepath: str) -> pd.DataFrame:
@@ -73,9 +86,14 @@ st.sidebar.title("Benchmark Config")
 st.sidebar.markdown("Configure the local Red Team orchestrator before dispatching inference tasks.")
 
 st.sidebar.header("Target Topologies")
-available_models = ["llama3:8b", "llama3.1:8b", "llama3.2:3b", "qwen2.5:7b", "mistral:7b"]
-selected_models = st.sidebar.multiselect("Select Local Models", available_models, default=["llama3:8b", "qwen2.5:7b"])
+available_models = get_available_local_models() 
 
+# Set smart defaults based on what's actually installed
+default_models = []
+if "ministral-3:8b" in available_models: default_models.append("ministral-3:8b")
+elif available_models: default_models.append(available_models[0])
+
+selected_models = st.sidebar.multiselect("Select Local Models", available_models, default=default_models)
 st.sidebar.divider()
 st.sidebar.header("Execution Parameters")
 iterations = st.sidebar.number_input("Iterations per Attack", min_value=1, max_value=100, value=3)
@@ -92,7 +110,10 @@ use_gen_def = st.sidebar.checkbox("Include Generated Defenses", value=True)
 st.sidebar.divider()
 st.sidebar.header("LLM-as-a-Judge")
 use_judge = st.sidebar.checkbox("Enable Batch Evaluation", value=True)
-judge_model = st.sidebar.selectbox("Judge Model", available_models, index=3)
+
+# Find a good default judge if qwen3.5:9b isn't there
+default_judge_idx = available_models.index("qwen3.5:9b") if "qwen3.5:9b" in available_models else 0
+judge_model = st.sidebar.selectbox("Judge Model", available_models, index=default_judge_idx)
 show_thoughts = st.sidebar.checkbox("Log Agent Thoughts", value=True)
 
 # --- Main Layout ---
