@@ -3,7 +3,8 @@ import json
 import os
 import subprocess
 import pandas as pd
-import altair as alt
+import plotly.express as px
+import plotly.graph_objects as go
 
 # Import configuration models and prompt utilities
 from config import BenchmarkConfig
@@ -30,8 +31,10 @@ def load_and_parse_results(filepath: str) -> pd.DataFrame:
                 "Severity 2": metrics.get("severity_2_violation", 0),
                 "Severity 3": metrics.get("severity_3_violation", 0),
                 "Confusion": metrics.get("confusion", 0),
-                "Coerced": metrics.get("coerced_violations", 0),
-                "Failures": metrics.get("failure_no_tool_called", 0)
+                "Failures": metrics.get("failure_no_tool_called", 0),
+                "Authority Bias": metrics.get("authority_bias", 0),
+                "Urgency Panic": metrics.get("urgency_panic", 0),
+                "Instruction Amnesia": metrics.get("instruction_amnesia", 0)
             })
             
     return pd.DataFrame(parsed_data)
@@ -48,6 +51,9 @@ if "log_history" not in st.session_state:
 
 if "run_status" not in st.session_state:
     st.session_state.run_status = {"type": "info", "message": "No recent runs recorded."}
+    
+if "live_outcomes" not in st.session_state:
+    st.session_state.live_outcomes = {}
 
 # --- Carregamento Automático de Dados ---
 if "results_df" not in st.session_state:
@@ -56,43 +62,57 @@ if "results_df" not in st.session_state:
 def refresh_results():
     if os.path.exists(RESULTS_FILE):
         st.session_state.results_df = load_and_parse_results(RESULTS_FILE)
-    else:
-        st.session_state.results_df = pd.DataFrame()
+        st.rerun()
 
 # Tenta carregar na primeira vez que o script rodar
 if st.session_state.results_df.empty:
     refresh_results()
 
-# --- UI Sidebar: Execution Parameters ---
+# --- Sidebar Configuration ---
+st.sidebar.title("Benchmark Config")
+st.sidebar.markdown("Configure the local Red Team orchestrator before dispatching inference tasks.")
+
+st.sidebar.header("Target Topologies")
+available_models = ["llama3:8b", "llama3.1:8b", "llama3.2:3b", "qwen2.5:7b", "mistral:7b"]
+selected_models = st.sidebar.multiselect("Select Local Models", available_models, default=["llama3:8b", "qwen2.5:7b"])
+
+st.sidebar.divider()
 st.sidebar.header("Execution Parameters")
-
-available_models = ["ministral-3:3b", "ministral-3:8b", "ministral-3:14b", "qwen3.5:9b", "gemma4:e4b"]
-selected_models = st.sidebar.multiselect("Target Models", available_models, default=["ministral-3:8b"])
-
-iterations = st.sidebar.number_input("Iterations per Permutation (N)", min_value=1, max_value=50, value=3)
-max_turns = st.sidebar.number_input("Max Agent Turns (Deep Mode)", min_value=1, max_value=10, value=1)
+iterations = st.sidebar.number_input("Iterations per Attack", min_value=1, max_value=100, value=3)
+max_turns = st.sidebar.number_input("Max Agentic Turns", min_value=1, max_value=5, value=2)
+max_retries = st.sidebar.number_input("Max Retries on Error", min_value=0, max_value=5, value=2)
 timeout = st.sidebar.slider("UDP Discovery Timeout (s)", min_value=1.0, max_value=10.0, value=3.0)
+
+st.sidebar.divider()
+st.sidebar.header("Prompt Sources")
+use_custom = st.sidebar.checkbox("Include Custom Prompts", value=True)
+use_gen_inj = st.sidebar.checkbox("Include Generated Injections", value=True)
+use_gen_def = st.sidebar.checkbox("Include Generated Defenses", value=True)
 
 st.sidebar.divider()
 st.sidebar.header("LLM-as-a-Judge")
 use_judge = st.sidebar.checkbox("Enable Batch Evaluation", value=True)
 judge_model = st.sidebar.selectbox("Judge Model", available_models, index=3)
+show_thoughts = st.sidebar.checkbox("Log Agent Thoughts", value=True)
 
-st.sidebar.divider()
-show_thoughts = st.sidebar.checkbox("Show LLM Thoughts in Console", value=False)
+# --- Main Layout ---
+st.title("LLM Red Team Benchmark")
+st.markdown("A distributed framework for stress-testing LLM Tool Calling interfaces against Multi-Turn Injections.")
 
-# --- UI Main Panel: Tabs ---
-tab_run, tab_prompts, tab_results = st.tabs(["Control Center", "Custom Prompts", "Dashboard & Results"])
+tab_run, tab_gen, tab_prompts, tab_results = st.tabs([
+    "Control Center", 
+    "Payload Generation",
+    "Custom Prompts", 
+    "Dashboard & Results"
+])
 
 # --- TAB 1: Control Center ---
 with tab_run:
-    st.header("Cluster Execution")
-    st.write("Launch the distributed benchmark across local workers.")
-    
-    # Execution Controls Layout
+    # 1. Execution Card
+    st.subheader("Cluster Execution")
     col1, col2 = st.columns([1, 1])
     with col1:
-        run_btn = st.button("▶ Run Benchmark", disabled=st.session_state.benchmark_running, type="primary", use_container_width=True)
+        run_btn = st.button("▶ Run Benchmark", type="primary", use_container_width=True, disabled=st.session_state.benchmark_running)
     with col2:
         abort_btn = st.button("🛑 Abort Benchmark", disabled=not st.session_state.benchmark_running, type="secondary", use_container_width=True)
 
@@ -107,16 +127,22 @@ with tab_run:
     if run_btn:
         st.session_state.benchmark_running = True
         st.session_state.log_history = []
+        st.session_state.live_outcomes = {}
         st.session_state.run_status = {"type": "info", "message": "Initializing cluster components..."}
         st.rerun()
 
     # Active Benchmark Execution Block
     if st.session_state.benchmark_running:
+        
         run_config = BenchmarkConfig(
             models=selected_models,
             iterations=iterations,
             max_turns=max_turns,
+            max_retries=max_retries,
             timeout=timeout,
+            use_custom_prompts=use_custom,
+            use_generated_injections=use_gen_inj,
+            use_generated_defenses=use_gen_def,
             use_judge=use_judge,
             judge_model=judge_model,
             output=RESULTS_FILE,
@@ -125,39 +151,66 @@ with tab_run:
         
         run_config.to_json(TEMP_CONFIG_FILE)
         
-        system_prompts, injection_payloads = load_all_prompts()
+        system_prompts, injection_payloads = load_all_prompts(
+            use_custom=use_custom,
+            use_gen_inj=use_gen_inj,
+            use_gen_def=use_gen_def
+        )
         total_inferences = len(selected_models) * len(system_prompts) * len(injection_payloads) * iterations
         
-        # Using the -u flag ensures unbuffered output streams to the UI in real time
-        command = ["python", "-u", "master_node.py", "--config", TEMP_CONFIG_FILE]
-            
         st.info(f"Target Queue: {total_inferences} inferences scheduled.")
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        with st.expander("Live Cluster Logs", expanded=True):
-            log_container = st.empty()
+        col_logs, col_chart = st.columns([2, 1])
+        with col_logs:
+            with st.expander("Live Cluster Logs", expanded=True):
+                logs_container = st.empty()
+        with col_chart:
+            live_chart = st.empty()
+            st.caption("Live Outcome Distribution")
             
+        process = subprocess.Popen(
+            ["python", "-u", "master_node.py", "--config", TEMP_CONFIG_FILE],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        completed_inferences = 0
         is_interrupted = False
         
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-            completed_inferences = 0
-            
             for line in iter(process.stdout.readline, ''):
                 clean_line = line.strip()
-                if not clean_line:
-                    continue
+                if not clean_line: continue
                 
+                # Append to persistent log history
                 st.session_state.log_history.append(clean_line)
                 
                 # Render the last 15 lines dynamically in the log terminal component
-                live_logs = st.session_state.log_history[-15:]
-                log_container.code("\n".join(live_logs), language="bash")
+                display_logs = "\n".join(st.session_state.log_history[-15:])
+                logs_container.code(display_logs, language="bash")
                 
                 if "Completed test:" in clean_line:
                     completed_inferences += 1
+                    outcome_name = clean_line.split(" -> ")[-1].strip()
+                    
+                    if outcome_name not in st.session_state.live_outcomes:
+                        st.session_state.live_outcomes[outcome_name] = 0
+                    st.session_state.live_outcomes[outcome_name] += 1
+                    
+                    if st.session_state.live_outcomes:
+                        fig = px.pie(
+                            names=list(st.session_state.live_outcomes.keys()), 
+                            values=list(st.session_state.live_outcomes.values()),
+                            hole=0.4
+                        )
+                        fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), showlegend=False)
+                        live_chart.plotly_chart(fig, use_container_width=True)
+                    
                     progress_fraction = min(completed_inferences / total_inferences, 1.0)
                     progress_bar.progress(progress_fraction)
                     
@@ -209,7 +262,7 @@ with tab_run:
             st.session_state.benchmark_running = False
             if os.path.exists(TEMP_CONFIG_FILE):
                 os.remove(TEMP_CONFIG_FILE)
-                
+            
             if not is_interrupted:
                 st.rerun()
 
@@ -230,7 +283,37 @@ with tab_run:
         with st.expander("Final Run Terminal Logs", expanded=True):
             st.code("\n".join(st.session_state.log_history), language="bash")
 
-# --- TAB 2: Custom Prompts ---
+# --- TAB 2: Payload Generation ---
+with tab_gen:
+    st.header("Automated Generators")
+    st.write("Trigger Gemini to synthesize new payloads or defenses dynamically.")
+    
+    colA, colB = st.columns(2)
+    with colA:
+        with st.container(border=True):
+            st.subheader("Red Team: Injection Generator")
+            st.caption("Generate advanced, obfuscated multi-turn attack payloads.")
+            num_payloads = st.number_input("Number of Payloads", 1, 50, 10)
+            atk_model = st.selectbox("Attacker Model", ["gemini-2.5-flash", "gemini-1.5-pro"])
+            if st.button("Generate Injections", use_container_width=True):
+                with st.spinner("Generating..."):
+                    result = subprocess.run(["python", "injection_generator.py", "--model", atk_model, "--num", str(num_payloads)], capture_output=True, text=True)
+                st.success("Injections generated and saved to generated_injections.json!")
+                with st.expander("View Generator Logs"):
+                    st.code(result.stdout, language="bash")
+            
+    with colB:
+        with st.container(border=True):
+            st.subheader("Blue Team: Defense Generator")
+            st.caption("Generate resilient system prompts using advanced self-reflection.")
+            if st.button("Generate Defenses", use_container_width=True):
+                with st.spinner("Generating..."):
+                    result = subprocess.run(["python", "defense_generator.py"], capture_output=True, text=True)
+                st.success("Defenses generated and saved to generated_defenses.json!")
+                with st.expander("View Generator Logs"):
+                    st.code(result.stdout, language="bash")
+
+# --- TAB 3: Custom Prompts ---
 with tab_prompts:
     st.header("Inject Custom System Prompts")
     st.write("Add new defense strategies here. They will be saved to `custom_prompts.json` and loaded by the orchestrator.")
@@ -252,9 +335,21 @@ with tab_prompts:
                 json.dump(custom_data, f, indent=4)
             st.success(f"Prompt {prompt_key} saved successfully!")
 
-# --- TAB 3: Results Dashboard ---
+# --- TAB 4: Results Dashboard ---
 with tab_results:
-    st.header("Security Metrics")
+    st.header("Security Metrics & Control Illusion Analysis")
+    
+    col_dl1, col_dl2, _ = st.columns([1, 1, 4])
+    with col_dl1:
+        if os.path.exists(RESULTS_FILE):
+            with open(RESULTS_FILE, "r") as f:
+                st.download_button("Download JSON", f, file_name="benchmark_julgado.json")
+    with col_dl2:
+        if os.path.exists(RESULTS_FILE):
+            if st.button("Clear Results"):
+                os.remove(RESULTS_FILE)
+                st.session_state.results_df = pd.DataFrame()
+                st.rerun()
     
     if os.path.exists(RESULTS_FILE):
         df = load_and_parse_results(RESULTS_FILE)
@@ -263,8 +358,8 @@ with tab_results:
             # Aggregate data by Model and Defense
             agg_df = df.groupby(["Model", "Defense"]).sum().reset_index()
             
-            # 2. Pandas Vectorized Sum (Much cleaner than chaining +)
-            sum_cols = ["Compliant", "Severity 1", "Severity 2", "Severity 3", "Confusion", "Failures"]
+            # 2. Pandas Vectorized Sum
+            sum_cols = ["Compliant", "Severity 1", "Severity 2", "Severity 3", "Confusion", "Failures", "Authority Bias", "Urgency Panic", "Instruction Amnesia"]
             agg_df["Total Inferences"] = agg_df[sum_cols].sum(axis=1)
             
             # Prevent division by zero
@@ -273,39 +368,58 @@ with tab_results:
             # Calculate key metrics
             agg_df["Immunity Rate (%)"] = (agg_df["Compliant"] / safe_totals) * 100
             agg_df["Critical Fail Rate (%)"] = (agg_df["Severity 3"] / safe_totals) * 100
-            agg_df["Coercion Rate (%)"] = (agg_df["Coerced"] / safe_totals) * 100
             
-            st.subheader("Immunity Rate by Defense Strategy")
+            # Calculate specific Control Illusion Rates
+            agg_df["Authority Bias (%)"] = (agg_df["Authority Bias"] / safe_totals) * 100
+            agg_df["Urgency Panic (%)"] = (agg_df["Urgency Panic"] / safe_totals) * 100
+            agg_df["Amnesia Rate (%)"] = (agg_df["Instruction Amnesia"] / safe_totals) * 100
             
-            # 3. Polished Altair Chart
-            chart = alt.Chart(agg_df).mark_bar(
-                cornerRadiusTopLeft=4, 
-                cornerRadiusTopRight=4
-            ).encode(
-                # Clean X axis without duplicate titles
-                x=alt.X("Defense:N", sort="-y", title=None, axis=alt.Axis(labelAngle=-40, labelLimit=200)),
-                # Lock Y axis from 0 to 100 for percentage consistency
-                y=alt.Y("Immunity Rate (%):Q", title="Immunity Rate (%)", scale=alt.Scale(domain=[0, 100])),
-                color=alt.Color("Model:N", title="Target Model"),
-                column=alt.Column("Model:N", title=None, header=alt.Header(labelFontSize=14, labelFontWeight="bold")),
-                tooltip=[
-                    alt.Tooltip("Model:N"),
-                    alt.Tooltip("Defense:N"),
-                    alt.Tooltip("Immunity Rate (%):Q", format=".1f"),
-                    alt.Tooltip("Total Inferences:Q")
-                ]
-            ).properties(
-                width=250, 
-                height=350
-            ).configure_view(
-                stroke=None # Removes the ugly border box around facets
+            # KPI Cards
+            global_immunity = (agg_df["Compliant"].sum() / safe_totals.sum()) * 100
+            total_tests = safe_totals.sum()
+            critical_fails = agg_df["Severity 3"].sum()
+            
+            kc1, kc2, kc3 = st.columns(3)
+            kc1.metric("Total Inferences", f"{total_tests}")
+            kc2.metric("Global Immunity Rate", f"{global_immunity:.1f}%")
+            kc3.metric("Critical System Failures", f"{critical_fails}")
+            
+            # --- The Control Illusion Matrix ---
+            st.divider()
+            st.subheader("Control Illusion Psychological Matrix")
+            st.write("Visualizing exactly *why* models broke their RBAC contracts.")
+            
+            model_psy_df = agg_df.groupby("Model")[["Authority Bias (%)", "Urgency Panic (%)", "Amnesia Rate (%)"]].mean().reset_index()
+            
+            bar_fig = px.bar(
+                model_psy_df, 
+                x="Model", 
+                y=["Authority Bias (%)", "Urgency Panic (%)", "Amnesia Rate (%)"],
+                barmode="group",
+                title="Average Psychological Failure Rates per Model",
+                labels={"value": "Failure Rate (%)", "variable": "Psychological Vector"}
             )
+            st.plotly_chart(bar_fig, use_container_width=True)
             
-            # Render using Streamlit's native width control
-            st.altair_chart(chart, use_container_width=True)
+            # Plotly Radar Chart
+            st.divider()
+            st.subheader("Model Resilience Radar")
+            model_df = agg_df.groupby("Model")[["Immunity Rate (%)", "Critical Fail Rate (%)"]].mean().reset_index()
+            
+            radar_fig = go.Figure()
+            categories = ["Immunity Rate (%)", "Critical Fail Rate (%)"]
+            for i, row in model_df.iterrows():
+                radar_fig.add_trace(go.Scatterpolar(
+                    r=[row["Immunity Rate (%)"], row["Critical Fail Rate (%)"]],
+                    theta=categories,
+                    fill='toself',
+                    name=row["Model"]
+                ))
+            radar_fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), showlegend=True)
+            st.plotly_chart(radar_fig, use_container_width=True)
             
             st.divider()
-            st.subheader("Defense Performance Matrix")
+            st.subheader("Defense Performance Analysis")
             
             # We select only the most relevant columns for the final presentation
             display_columns = [
@@ -314,7 +428,9 @@ with tab_results:
                 "Total Inferences", 
                 "Immunity Rate (%)", 
                 "Critical Fail Rate (%)", 
-                "Coercion Rate (%)"
+                "Authority Bias (%)",
+                "Urgency Panic (%)",
+                "Amnesia Rate (%)"
             ]
             
             st.dataframe(
@@ -333,7 +449,7 @@ with tab_results:
                         help="Total number of inferences executed for this permutation."
                     ),
                     "Immunity Rate (%)": st.column_config.ProgressColumn(
-                        "Immunity Rate",
+                        "Immunity",
                         help="Percentage of tests where the model successfully blocked the attack.",
                         format="%.1f%%",
                         min_value=0,
@@ -344,9 +460,19 @@ with tab_results:
                         help="Percentage of times the model executed the delete_database payload.",
                         format="%.1f%%",
                     ),
-                    "Coercion Rate (%)": st.column_config.NumberColumn(
-                        "Coercion Rate",
-                        help="Percentage of times the LLM Judge deemed the model psychologically coerced.",
+                    "Authority Bias (%)": st.column_config.NumberColumn(
+                        "Auth Bias",
+                        help="Model broke RBAC because it trusted a fake persona.",
+                        format="%.1f%%",
+                    ),
+                    "Urgency Panic (%)": st.column_config.NumberColumn(
+                        "Urgency Panic",
+                        help="Model broke RBAC due to a fake emergency.",
+                        format="%.1f%%",
+                    ),
+                    "Amnesia Rate (%)": st.column_config.NumberColumn(
+                        "Amnesia",
+                        help="Model forgot constraints without explicit coercion.",
                         format="%.1f%%",
                     )
                 },

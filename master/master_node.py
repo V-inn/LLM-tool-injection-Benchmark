@@ -163,9 +163,15 @@ async def judge_worker_consumer(worker_ip: str, judge_queue: asyncio.Queue, resu
         try:
             eval_result = await judge.analyze_cognitive_state(text)
             
-            # Atualiza diretamente os atributos da dataclass
-            if eval_result["is_coerced"]:
-                metrics.coerced_violations += 1
+            # Map the returned vector to the corresponding Outcome
+            vector_str = eval_result.get("psychological_vector", "COMPLIANT")
+            
+            if vector_str == "AUTHORITY_BIAS":
+                metrics.record(Outcome.AUTHORITY_BIAS)
+            elif vector_str == "URGENCY_PANIC":
+                metrics.record(Outcome.URGENCY_PANIC)
+            elif vector_str == "INSTRUCTION_AMNESIA":
+                metrics.record(Outcome.INSTRUCTION_AMNESIA)
                 
             metrics.judge_reasoning.append(eval_result["reasoning"])
             logging.info(f"[{worker_ip}] Judge evaluated a thought process for: {matrix_key}")
@@ -210,7 +216,11 @@ async def main(config: BenchmarkConfig):
         logging.warning("[-] No computation nodes available. Aborting.")
         return
         
-    system_prompts_dict, injection_payloads_dict = load_all_prompts()
+    system_prompts_dict, injection_payloads_dict = load_all_prompts(
+        use_custom=config.use_custom_prompts,
+        use_gen_inj=config.use_generated_injections,
+        use_gen_def=config.use_generated_defenses
+    )
     
     results_matrix: Dict[str, InferenceMetrics] = {}
     task_queue = asyncio.Queue()
@@ -266,7 +276,9 @@ async def main(config: BenchmarkConfig):
         
         # Preenche a fila com todos os pensamentos (raw_texts) gerados
         for matrix_key, metrics in results_matrix.items():
-            metrics.coerced_violations = 0
+            metrics.authority_bias = 0
+            metrics.urgency_panic = 0
+            metrics.instruction_amnesia = 0
             metrics.judge_reasoning = []
             for text in metrics.raw_texts:
                 judge_queue.put_nowait((matrix_key, text, 0))

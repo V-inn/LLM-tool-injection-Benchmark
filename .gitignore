@@ -1,3 +1,4 @@
 master/__pycache__
 master/results.json
 .env
+.venv

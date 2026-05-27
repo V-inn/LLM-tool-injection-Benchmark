@@ -26,6 +26,11 @@ class Outcome(str, Enum):
     SEVERITY_3         = "severity_3_violation"
     CONFUSION          = "confusion"
     NO_TOOL_CALLED     = "failure_no_tool_called"
+    
+    # Psychological Vectors
+    AUTHORITY_BIAS     = "authority_bias"
+    URGENCY_PANIC      = "urgency_panic"
+    INSTRUCTION_AMNESIA = "instruction_amnesia"
 
 
 # ---------------------------------------------------------------------------
@@ -34,25 +39,40 @@ class Outcome(str, Enum):
 
 @dataclass
 class InferenceMetrics:
-    """
-    Typed accumulator for one (model, defense, attack) permutation.
-    Replaces the untyped dict — typos become AttributeErrors, not silent bugs.
-    """
-    compliant:              int = 0
-    severity_1_violation:   int = 0
-    severity_2_violation:   int = 0
-    severity_3_violation:   int = 0
-    confusion:              int = 0
+    compliant: int = 0
+    severity_1_violation: int = 0
+    severity_2_violation: int = 0
+    severity_3_violation: int = 0
+    confusion: int = 0
     failure_no_tool_called: int = 0
-    coerced_violations:     int = 0
-    raw_texts:              list[str] = field(default_factory=list)
-    judge_reasoning:        list[str] = field(default_factory=list)
+    
+    # Psychological Vectors
+    authority_bias: int = 0
+    urgency_panic: int = 0
+    instruction_amnesia: int = 0
+    
+    raw_texts: list[str] = field(default_factory=list)
+    judge_reasoning: list[str] = field(default_factory=list)
 
     def record(self, outcome: Outcome) -> None:
-        """Increment the counter that corresponds to this outcome."""
-        attr = outcome.value          # e.g. "compliant", "severity_3_violation"
-        if hasattr(self, attr):
-            setattr(self, attr, getattr(self, attr) + 1)
+        if outcome == Outcome.COMPLIANT:
+            self.compliant += 1
+        elif outcome == Outcome.SEVERITY_1:
+            self.severity_1_violation += 1
+        elif outcome == Outcome.SEVERITY_2:
+            self.severity_2_violation += 1
+        elif outcome == Outcome.SEVERITY_3:
+            self.severity_3_violation += 1
+        elif outcome == Outcome.CONFUSION:
+            self.confusion += 1
+        elif outcome == Outcome.NO_TOOL_CALLED:
+            self.failure_no_tool_called += 1
+        elif outcome == Outcome.AUTHORITY_BIAS:
+            self.authority_bias += 1
+        elif outcome == Outcome.URGENCY_PANIC:
+            self.urgency_panic += 1
+        elif outcome == Outcome.INSTRUCTION_AMNESIA:
+            self.instruction_amnesia += 1
 
     @property
     def total_inferences(self) -> int:
@@ -63,6 +83,9 @@ class InferenceMetrics:
             + self.severity_3_violation
             + self.confusion
             + self.failure_no_tool_called
+            + self.authority_bias
+            + self.urgency_panic
+            + self.instruction_amnesia
         )
 
     def to_dict(self) -> dict:
@@ -83,11 +106,16 @@ class BenchmarkConfig:
     """All parameters that control a benchmark run."""
 
     # Inference
-    models:               list[str] = field(default_factory=lambda: ["ministral-3:8b", "qwen3.5:9b", "gemma4:e4b"])
-    iterations:           int   = 5
-    concurrency_per_node: int   = 2
-    max_retries:          int   = 3
-    max_turns:            int   = 1
+    models:                   list[str] = field(default_factory=lambda: ["ministral-3:8b", "qwen3.5:9b", "gemma4:e4b"])
+    iterations:               int   = 5
+    concurrency_per_node:     int   = 1
+    max_retries:              int   = 3
+    max_turns:                int   = 1
+    
+    # Prompt Sources
+    use_custom_prompts:       bool  = True
+    use_generated_injections: bool  = True
+    use_generated_defenses:   bool  = True
 
     # Network
     ollama_port:          int   = 11434
