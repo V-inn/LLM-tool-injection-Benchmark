@@ -35,7 +35,7 @@ venv.bak/
 master/results.json
 master/benchmark.json
 master/benchmark.log
-master/benchmark_julgado.json
+master/benchmark_results.json
 master/generated_injections.json
 master/generated_defenses.json
 master/custom_prompts.json
