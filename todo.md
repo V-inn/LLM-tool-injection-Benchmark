@@ -20,7 +20,7 @@ O primeiro passo prático é garantir que o sistema penalize defesas excessivame
 
 ### Fase 2: Estabelecimento do Modelo de Referência (*Baseline Anchor*)
 
-Definir a régua empírica utilizando a arquitetura correta como marco zero.
+Definir a régua empírica utilizando a arquitetura correta como base.
 
 1. **Isolar o Modelo de Controle:**
 * Configurar o `qwen3.5:9b` como o alvo principal (`ref_model`) para a rodada de calibração inicial.
@@ -74,8 +74,6 @@ Com as fundações calibradas, o laboratório pode operar em sua capacidade tota
 ---
 
 ### Fase 5: Compilação do Relatório de Iniciação Científica
-
-Estruturar as descobertas matemáticas para apresentação ao professor Emílio Vital Brazil.
 
 1. **Redação das Demonstrações Matemáticas:**
 * Transcrever as justificativas para Intervalo de Confiança, Alpha de Cronbach ($\alpha$) e Kappa de Cohen ($\kappa$) na seção de Metodologia.
