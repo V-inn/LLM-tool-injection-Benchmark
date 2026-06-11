@@ -40,6 +40,12 @@ USAGE
 import json
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+# Import the set of benign-control injection keys so the analyzer can compute
+# FPR (False Positive Rate) separately from the adversarial immunity rate.
+sys.path.insert(0, str(Path(__file__).parent))
+from config import BENIGN_CONTROL_KEYS
 
 
 def analyze_benchmark_results(json_filepath: str):
@@ -76,6 +82,9 @@ def analyze_benchmark_results(json_filepath: str):
         "urgency_panic": 0,
         "instruction_amnesia": 0,
         "failures": 0,
+        # Control-group FPR counters — accumulated only from benign-payload cells.
+        "false_positives": 0,
+        "benign_total": 0,
         "defenses": defaultdict(lambda: {"total": 0, "compliant": 0})
     })
 
@@ -97,6 +106,7 @@ def analyze_benchmark_results(json_filepath: str):
             metrics.get("severity_3_violation", 0),
             metrics.get("confusion", 0),
             metrics.get("failure_no_tool_called", 0),
+            metrics.get("false_positive", 0),
         ])
         stats[model_name]["total_inferences"]  += actual_count
         stats[model_name]["compliant"]          += metrics.get("compliant", 0)
@@ -108,6 +118,11 @@ def analyze_benchmark_results(json_filepath: str):
         stats[model_name]["urgency_panic"]      += metrics.get("urgency_panic", 0)
         stats[model_name]["instruction_amnesia"] += metrics.get("instruction_amnesia", 0)
         stats[model_name]["failures"]           += metrics.get("failure_no_tool_called", 0)
+
+        # Accumulate false-positive counts only for cells with benign control payloads.
+        if injection in BENIGN_CONTROL_KEYS:
+            stats[model_name]["false_positives"] += metrics.get("false_positive", 0)
+            stats[model_name]["benign_total"]    += actual_count
 
         # Track per-defense totals for the breakdown section.
         stats[model_name]["defenses"][sys_prompt]["total"]    += actual_count
@@ -133,9 +148,18 @@ def analyze_benchmark_results(json_filepath: str):
         amnesia_rate    = (data["instruction_amnesia"]  / total) * 100
         failure_rate    = (data["failures"]             / total) * 100
 
+        # FPR is computed only over the benign-control subset to avoid conflating
+        # over-refusal with general compliance numbers.
+        benign_total = data["benign_total"]
+        fpr = (data["false_positives"] / benign_total) * 100 if benign_total > 0 else None
+
         print(f"[*] MODEL: {model.upper()}")
         print(f"    Total Inferences:                   {total}")
-        print(f"    Immunity Rate (Compliant):          {compliance_rate:.2f}%")
+        print(f"    Immunity Rate / TPR (Compliant):    {compliance_rate:.2f}%")
+        if fpr is not None:
+            print(f"    False Positive Rate / FPR:          {fpr:.2f}%  (over-refusal on benign payload)")
+        else:
+            print(f"    False Positive Rate / FPR:          N/A  (no benign-control data in this run)")
         print(f"    Severity 1 Violations:              {sev1_rate:.2f}%")
         print(f"    Severity 2 Violations:              {sev2_rate:.2f}%")
         print(f"    Critical Failures (Severity 3):     {sev3_rate:.2f}%")
