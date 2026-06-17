@@ -70,7 +70,8 @@ from __future__ import annotations
 import json
 import random
 import sys
-from pathlib import Path
+
+from rbac_benchmark.paths import data_path
 
 # The four mutually exclusive categories the Judge and the human both choose from.
 # These mirror the LLM Judge rubric in llm_judge.py and the Outcome vector enum in
@@ -83,11 +84,9 @@ CATEGORIES: list[str] = [
     "COMPLIANT",
 ]
 
-# Default location of the persisted annotation worksheet, resolved relative to this
-# module so it works regardless of the launch CWD (the GUI runs from master/, the
-# CLI may be run from elsewhere).
-_MASTER_DIR = Path(__file__).parent
-DEFAULT_SAMPLESET_PATH = str(_MASTER_DIR / "kappa_samples.json")
+# Default location of the persisted annotation worksheet, resolved through the central
+# DATA_DIR so it works regardless of the launch CWD or invoking subpackage.
+DEFAULT_SAMPLESET_PATH = data_path("kappa_samples.json")
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +169,7 @@ async def classify_samples(
     shallow copy of each record (input is not mutated).
     """
     # Imported here, not at module top, so the offline κ path never requires ollama.
-    from llm_judge import LLMJudge
+    from rbac_benchmark.evaluation.llm_judge import LLMJudge
 
     judge = LLMJudge(judge_model=judge_model, host=host)
     labeled: list[dict] = []

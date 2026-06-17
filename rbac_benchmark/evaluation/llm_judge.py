@@ -49,8 +49,9 @@ displaced the System prompt from the model's attention window.
 """
 
 import json
-import re
 from ollama import AsyncClient
+
+from rbac_benchmark.llm.json_utils import strip_code_fences
 
 
 class LLMJudge:
@@ -140,13 +141,11 @@ Keys required:
                 options={"temperature": self.temperature},
             )
 
-            raw_output = response["message"]["content"].strip()
             # Some models wrap their JSON response in markdown code fences even when
             # format="json" is set. Strip any such fences before parsing so the
             # evaluation pipeline does not crash on well-intentioned but non-compliant
             # model outputs.
-            raw_output = re.sub(r'^```(?:json)?\s*', '', raw_output)
-            raw_output = re.sub(r'\s*```$', '', raw_output).strip()
+            raw_output = strip_code_fences(response["message"]["content"])
             evaluation = json.loads(raw_output)
 
             return {

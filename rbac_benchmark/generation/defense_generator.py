@@ -39,21 +39,20 @@ Results are written to master/generated_defenses.json and automatically loaded b
 prompts.py as additional rows in the system_prompts dimension of the evaluation matrix.
 """
 
-import os
-import re
 import json
 import asyncio
 import argparse
-from pathlib import Path
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
+
+from rbac_benchmark.llm.clients import gemini_api_key, gemini_generate_json
+from rbac_benchmark.llm.json_utils import strip_code_fences
+from rbac_benchmark.paths import data_path
 
 load_dotenv()
 
-# All file paths are resolved relative to this module so the generator works
-# correctly regardless of the working directory at invocation time.
-_MASTER_DIR = Path(__file__).parent
+# Output is resolved through the central DATA_DIR so it lands where prompts.py looks
+# for it, regardless of the working directory at invocation time.
+DEFAULT_OUTPUT = data_path("generated_defenses.json")
 
 
 def build_blue_team_prompt() -> str:
@@ -104,62 +103,36 @@ async def generate_defenses(model: str = "gemini-2.5-flash", output_file: str = 
     occasionally produce subtly malformed JSON on the first attempt.
     """
     if output_file is None:
-        output_file = str(_MASTER_DIR / "generated_defenses.json")
+        output_file = DEFAULT_OUTPUT
 
     print(f"[*] Booting Automated Blue Team Generator (Gemini)...")
     print(f"[*] Model: {model}")
 
     # Validate cloud credentials before making any API call.
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
+    if not gemini_api_key():
         print("[-] Critical: GEMINI_API_KEY is not set in the environment or .env file.")
         print("    Set it with: export GEMINI_API_KEY=your_key_here")
         return
 
-    client = genai.Client()
     prompt = build_blue_team_prompt()
+    system = "You are an automated prompt engineering machine. Output strictly valid JSON."
 
-    max_retries = 3
-    base_delay = 2
-    for attempt in range(max_retries):
-        try:
-            response = await client.aio.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="You are an automated prompt engineering machine. Output strictly valid JSON.",
-                    response_mime_type="application/json",
-                )
-            )
+    # The shared client retries both transient API errors and malformed-JSON responses
+    # (retry_on_json_error) with exponential backoff before raising.
+    try:
+        raw_output = await gemini_generate_json(model, prompt, system, retry_on_json_error=True)
+        generated_dict = json.loads(strip_code_fences(raw_output))
 
-            raw_output = response.text.strip()
-            # Strip any markdown code fence wrappers. Some models add these even when
-            # response_mime_type="application/json" is set and the system instruction
-            # explicitly forbids them.
-            raw_output = re.sub(r'^```(?:json)?\s*', '', raw_output)
-            raw_output = re.sub(r'\s*```$', '', raw_output).strip()
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(generated_dict, f, indent=4)
 
-            generated_dict = json.loads(raw_output)
+        print(f"[+] Success! {len(generated_dict)} new defensive system prompts generated.")
+        print(f"[+] Saved to: {output_file}")
 
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(generated_dict, f, indent=4)
-
-            print(f"[+] Success! {len(generated_dict)} new defensive system prompts generated.")
-            print(f"[+] Saved to: {output_file}")
-            return
-
-        except json.JSONDecodeError:
-            # Malformed JSON from the model — retry. If this is the last attempt,
-            # fall through to the generic exception handler below.
-            print("[-] JSON Decode Error. Retrying...")
-            await asyncio.sleep(base_delay * (2 ** attempt))
-        except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"[-] Critical Error: {e}")
-                return
-            delay = base_delay * (2 ** attempt)
-            print(f"[-] Gemini API error: {e}. Retrying in {delay}s...")
-            await asyncio.sleep(delay)
+    except json.JSONDecodeError:
+        print("[-] Critical Error: model output was not valid JSON after retries.")
+    except Exception as e:
+        print(f"[-] Critical Error: {e}")
 
 
 # --- CLI Interface ---
@@ -175,12 +148,17 @@ def parse_arguments():
     parser.add_argument(
         "-o", "--output",
         type=str,
-        default=str(_MASTER_DIR / "generated_defenses.json"),
-        help="Output JSON path (default: master/generated_defenses.json)."
+        default=DEFAULT_OUTPUT,
+        help="Output JSON path (default: <DATA_DIR>/generated_defenses.json)."
     )
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main():
+    """Console entry point (rbac-gen-defenses) and `python -m` runner."""
     args = parse_arguments()
     asyncio.run(generate_defenses(model=args.model, output_file=args.output))
+
+
+if __name__ == "__main__":
+    main()

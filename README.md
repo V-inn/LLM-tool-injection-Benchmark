@@ -18,10 +18,27 @@ Instead of a binary success/failure classification, this benchmark utilizes an L
 
 The benchmark operates on a Master-Worker topology to facilitate rapid, distributed inference across local network clusters. **This framework is designed primarily for Linux platforms.**
 
-*   **Master Node (`master/master_node.py` / `master/gui_app.py`):** Orchestrates the benchmark execution. It dispatches generation tasks, aggregates metrics, and visualizes the resilience matrix via a Streamlit dashboard. *Note: By default, the master node automatically contributes to computing inference tasks (controlled by the `exclude_master` config parameter). You do NOT need to run a separate `worker_node.py` instance on the master machine.*
-*   **Worker Node (`slave/worker_node.py`):** A lightweight UDP-discoverable daemon that processes inference tasks. It interfaces directly with a local instance of Ollama to execute the tool-calling loop.
-*   **LLM-as-a-Judge (`master/llm_judge.py`):** An independent evaluation module that analyzes the target model's internal thought traces (`[THOUGHT]`) to categorize the precise mechanism of prompt breakdown.
-*   **Payload Generators (`master/injection_generator.py`, `master/defense_generator.py`):** Automated modules that leverage external models to synthesize advanced, obfuscated multi-turn attack payloads and resilient system prompt defenses.
+The code is an installable Python package, `rbac_benchmark`, organised by concern:
+
+```
+rbac_benchmark/
+  core/         config.py, prompts.py, tools.py        # domain model + defense/attack matrix
+  llm/          clients.py, json_utils.py              # shared Gemini/Ollama plumbing
+  evaluation/   analyzer.py, llm_judge.py, kappa_validation.py
+  generation/   injection_generator.py, defense_generator.py
+  orchestration/ master_node.py                        # the distributed coordinator
+  worker/       node.py, cats/                         # UDP-discoverable worker daemon (+ feline supervisor)
+  ui/           app.py + data.py / charts.py / state.py + tabs/   # Streamlit dashboard
+data/           generated_*.json, *_results.json, kappa_samples.json   # runtime artifacts
+tests/          pytest suite for the metric / extraction / κ math
+```
+
+*   **Master Node (`rbac_benchmark/orchestration/master_node.py` + `rbac_benchmark/ui/app.py`):** Orchestrates execution, dispatches generation tasks, aggregates metrics, and visualises the resilience matrix via a Streamlit dashboard. *Note: by default the master node also contributes inference (controlled by the `exclude_master` config parameter) — you do NOT need a separate worker on the master machine.*
+*   **Worker Node (`rbac_benchmark/worker/node.py`):** A lightweight UDP-discoverable daemon that processes inference tasks via a local Ollama instance.
+*   **LLM-as-a-Judge (`rbac_benchmark/evaluation/llm_judge.py`):** Analyses target `[THOUGHT]` traces to categorise the psychological failure vector (runs at temperature 0 for reproducibility).
+*   **Payload Generators (`rbac_benchmark/generation/`):** Automated red-team / blue-team modules that synthesise attack payloads and resilient system prompts.
+
+Console entry points (after `pip install -e .`): `rbac-dashboard`, `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`.
 
 ## Installation
 
@@ -34,10 +51,11 @@ The benchmark operates on a Master-Worker topology to facilitate rapid, distribu
 ### Setup
 
 1.  Clone the repository.
-2.  Install the required Python dependencies:
+2.  Install the package (editable) — this pulls the dependencies and registers the
+    `rbac-*` console entry points:
 
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
 
 3.  Ensure your chosen target models are pulled in Ollama (e.g., `llama3:8b`, `qwen2.5:7b`).
@@ -60,10 +78,37 @@ Two bash scripts are provided to automatically configure and start the nodes:
 
 ## Usage
 
+The dashboard (`rbac-dashboard`) has five tabs:
+
 1.  **Configure and Dispatch:**
-    *   Navigate to the **Control Center** tab in the web interface.
-    *   Configure your execution parameters (target models, iterations, max tool-calling turns).
-    *   Click **Dispatch Benchmark** to begin the automated evaluation.
+    *   On the **Control Center** tab, configure your execution parameters in the sidebar (target models, iterations, max tool-calling turns).
+    *   Click **▶ Run Benchmark** to begin the automated evaluation; live logs, a progress bar, and an outcome pie update in place.
 
 2.  **Analyze Results:**
-    Once the batch evaluation concludes, navigate to the **Advanced Dashboard** tab to view the Psychological Matrix, Model Resilience Radar, and detailed defense performance analysis.
+    On the **Dashboard & Results** tab, view the TPR/FPR KPIs, the Control Illusion Psychological Matrix, the Model Resilience Radar, the per-defense performance table, and the Phase-2 attack-validity / ΔTPR views.
+
+3.  **Generate Payloads / Defenses:** The **Payload Generation** tab drives the Gemini red-team / blue-team generators and the Phase-2 weak-attack replacer. The **Custom Prompts** tab adds hand-authored defenses.
+
+4.  **Validate the Judge (Phase 3):** The **Judge Validation (κ)** tab builds a stratified sample of `[THOUGHT]` traces, lets you blind-annotate them, and reports Cohen's κ against the Judge's labels (target κ ≥ 0.80).
+
+### Command line
+
+The same analysis is available headless via the console entry points:
+
+```bash
+rbac-analyze data/benchmark_results.json                    # aggregate TPR/FPR report
+rbac-analyze data/benchmark_results.json --delta-tpr        # marginal defense gain (ΔTPR)
+rbac-analyze data/benchmark_results.json --validate-attacks # Phase 2 attack strength
+rbac-kappa   data/kappa_samples.json                        # Phase 3 Cohen's κ (offline)
+```
+
+### Development
+
+Runtime artifacts (results, generated prompts, the κ worksheet) are written to `data/`
+(override with the `RBAC_DATA_DIR` environment variable). The metric / extraction / κ
+math is covered by a pytest suite:
+
+```bash
+pip install -e ".[test]"   # or: pip install pytest
+pytest -q
+```

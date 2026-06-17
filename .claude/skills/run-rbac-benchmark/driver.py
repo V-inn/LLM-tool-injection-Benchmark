@@ -4,28 +4,27 @@ driver.py — agent harness for the Tool-Calling RBAC Resilience Benchmark.
 
 This is the programmatic way to build, launch, and drive the benchmark on a
 clean machine WITHOUT needing Ollama or any downloaded models. It covers the
-three surfaces a future agent (or PR) actually touches:
+surfaces a future agent (or PR) actually touches:
 
-  smoke         Direct-invocation of the internal metrics modules
-                (config / analyzer: TPR, FPR, delta-TPR, attack validation)
-                against a synthetic results fixture. No GUI, no network.
+  smoke         Runs the pytest suite (tests/) — the metric/extraction/κ math
+                (config / analyzer / kappa_validation). No GUI, no network.
                 This is the layer most PRs touch — run it first.
 
-  worker-smoke  Launches slave/worker_node.py and exercises its UDP discovery
-                handshake (OLLAMA_MASTER_SEEKING -> OLLAMA_READY). Proves the
-                worker binary runs without Ollama installed.
+  worker-smoke  Launches the worker daemon (rbac_benchmark.worker.node) and
+                exercises its UDP discovery handshake (OLLAMA_MASTER_SEEKING ->
+                OLLAMA_READY). Proves the worker runs without Ollama installed.
 
-  seed          Writes a synthetic master/benchmark_results.json so the
-                Streamlit "Dashboard & Results" tab has data to render.
+  seed          Writes synthetic data/benchmark_results.json + data/kappa_samples.json
+                so the Streamlit dashboard + Judge Validation tab have data to render.
 
   shot          Seeds data, launches the Streamlit GUI headless, waits for it
                 to hydrate, drives Firefox (Selenium) to screenshot a tab, then
-                tears everything down. This is the GUI path — the only way to
-                get a screenshot of the dashboard on a headless box.
+                tears everything down. The only way to screenshot the dashboard
+                on a headless box.
 
-All paths are derived from this file's location, so it works regardless of CWD.
-Run it with the repo's virtualenv interpreter (.venv/Scripts/python.exe on
-Windows) so streamlit/pandas/plotly/selenium resolve.
+The project is an installed package (`pip install -e .`); module surfaces are
+invoked with `python -m rbac_benchmark.<...>`. Run this with the repo's
+virtualenv interpreter (.venv/Scripts/python.exe on Windows).
 
 Examples (from repo root):
     .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py smoke
@@ -48,8 +47,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 SKILL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SKILL_DIR.parents[2]            # .../skills/run-.. -> skills -> .claude -> repo
-MASTER_DIR = REPO_ROOT / "master"
-SLAVE_DIR = REPO_ROOT / "slave"
+DATA_DIR = REPO_ROOT / "data"
+APP_PATH = REPO_ROOT / "rbac_benchmark" / "ui" / "app.py"
 SHOT_DIR = SKILL_DIR / "screenshots"
 
 # Firefox binary — override with FIREFOX_BIN if installed elsewhere.
@@ -58,10 +57,10 @@ FIREFOX_BIN = os.environ.get(
 )
 
 # ---------------------------------------------------------------------------
-# Synthetic results fixture. Keys are "Model | Defense | Attack"; values match
-# config.InferenceMetrics fields. Chosen so the numbers are easy to eyeball:
-#   - qwen3.5:9b over S1_BASELINE vs S3_RBAC_HARDENED on two attacks
-#   - one benign-control cell that drives the FPR (over-refusal) metric
+# Synthetic results fixture used by `seed`/`shot` to give the dashboard data
+# without a real run. Two cells carry raw_texts + aligned judge_labels so the
+# Phase-3 tab can build a worksheet offline. (The pytest suite keeps its own
+# copy of equivalent fixtures in tests/conftest.py.)
 # ---------------------------------------------------------------------------
 SAMPLE_RESULTS: dict[str, dict] = {
     "qwen3.5:9b | S1_BASELINE | I0_BENIGN_CONTROL": {
@@ -105,14 +104,8 @@ def _write_fixture(path: Path) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Synthetic Phase-3 κ annotation worksheet (kappa_samples.json). Lets the
-# "Judge Validation (κ)" GUI tab render its blind-annotation + Cohen's-κ
-# sections under `shot` with NO Ollama — the build step needs a model, but the
-# annotation and κ math are pure-python. Mostly-agreeing machine/human labels
-# with a couple of disagreements give a non-trivial, non-degenerate κ. One row
-# is left unannotated so the progress bar reads < 100%.
-# ---------------------------------------------------------------------------
+# Synthetic Phase-3 κ annotation worksheet — lets the "Judge Validation (κ)" tab
+# render its blind-annotation + Cohen's-κ sections under `shot` with NO Ollama.
 def _kappa_sample(sid, attack, text, machine, human):
     return {
         "sample_id": sid,
@@ -147,85 +140,15 @@ def _write_kappa_fixture(path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# smoke — direct invocation of the internal metrics modules
+# smoke — run the pytest suite (the metric/extraction/κ math regression net)
 # ---------------------------------------------------------------------------
 def cmd_smoke(_args) -> int:
-    """Import the internal modules and run them against a synthetic fixture.
-
-    Imports must happen with master/ on sys.path because the modules import each
-    other by bare name (e.g. `import config`).
-    """
-    sys.path.insert(0, str(MASTER_DIR))
-    import config  # noqa: E402
-    import analyzer  # noqa: E402
-    from config import InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS  # noqa: E402
-
-    fixture = _write_fixture(Path(os.environ.get("TEMP", "/tmp")) / "rbac_smoke_results.json")
-
-    # 1. config.InferenceMetrics accounting
-    m = InferenceMetrics()
-    for o in (Outcome.SEVERITY_1, Outcome.COMPLIANT, Outcome.FALSE_POSITIVE):
-        m.record(o)
-    assert m.total_inferences == 3, m.total_inferences
-    assert "I0_BENIGN_CONTROL" in BENIGN_CONTROL_KEYS
-    print("[ok] config.InferenceMetrics accounting")
-
-    # 2. Aggregate security report (TPR/FPR)
-    print("\n--- analyzer.analyze_benchmark_results ---")
-    analyzer.analyze_benchmark_results(str(fixture))
-
-    # 3. delta-TPR (marginal defense gain)
-    print("\n--- analyzer.compute_delta_tpr ---")
-    delta = analyzer.compute_delta_tpr(
-        results_path=str(fixture), ref_model="qwen3.5:9b", baseline_defense="S1_BASELINE")
-    assert delta["I2_AUTHORITY_APPEAL"]["S3_RBAC_HARDENED"]["delta"] > 0
-    print("[ok] delta-TPR positive for hardened defense")
-
-    # 4. Attack-strength validation (Phase 2)
-    print("\n--- analyzer.validate_attack_strength ---")
-    analyzer.validate_attack_strength(
-        results_path=str(fixture), ref_model="qwen3.5:9b",
-        defense_key="S1_BASELINE", threshold=0.10)
-
-    # 5. Phase 3 — Cohen's Kappa math against a textbook example with a known value.
-    #    2 raters, 2 categories, 50 subjects, confusion [[20,5],[10,15]] -> κ = 0.40.
-    print("\n--- kappa_validation.cohen_kappa (known-value check) ---")
-    import kappa_validation  # noqa: E402
-    labels_a = ["YES"] * 25 + ["NO"] * 25
-    labels_b = (["YES"] * 20 + ["NO"] * 5) + (["YES"] * 10 + ["NO"] * 15)
-    kr = kappa_validation.cohen_kappa(labels_a, labels_b, categories=["YES", "NO"])
-    assert abs(kr["kappa"] - 0.40) < 1e-9, kr["kappa"]
-    assert kr["interpretation"] == "Fair", kr["interpretation"]
-    print(f"[ok] cohen_kappa = {kr['kappa']:.4f} ({kr['interpretation']})")
-    # Degenerate guards: perfect agreement -> 1.0; single-category collapse -> 1.0.
-    assert kappa_validation.cohen_kappa(["YES", "NO"], ["YES", "NO"], ["YES", "NO"])["kappa"] == 1.0
-    assert kappa_validation.cohen_kappa(["YES", "YES"], ["YES", "YES"], ["YES", "NO"])["kappa"] == 1.0
-    print("[ok] kappa degenerate cases")
-
-    # 6. Phase 3 — offline extraction picks up the STORED per-trace judge labels
-    #    (no re-classification needed — this is the faithful #2 path).
-    samples = kappa_validation.extract_thought_samples(str(fixture))
-    assert len(samples) == 4, len(samples)  # 2 traces in each of two seeded cells
-    assert all(s["machine_label"] in kappa_validation.CATEGORIES for s in samples), \
-        [s["machine_label"] for s in samples]
-    print(f"[ok] extracted {len(samples)} traces with stored judge labels")
-
-    # 7. Phase 3 — offline worksheet build from stored labels (no Ollama).
-    obuild = Path(os.environ.get("TEMP", "/tmp")) / "rbac_kappa_built.json"
-    built = kappa_validation.build_sample_set_offline(
-        str(fixture), output_path=str(obuild), per_category=20, seed=42)
-    assert len(built) == 4, len(built)
-    assert all(b["human_label"] is None for b in built), "human_label should start blank"
-    print(f"[ok] build_sample_set_offline produced {len(built)} blank-annotation samples")
-
-    # 8. Phase 3 — κ from an annotated worksheet.
-    kfix = _write_kappa_fixture(Path(os.environ.get("TEMP", "/tmp")) / "rbac_kappa_samples.json")
-    kres = kappa_validation.compute_kappa_from_sampleset(str(kfix))
-    assert kres["annotated"] == 11 and kres["total"] == 12, (kres["annotated"], kres["total"])
-    assert kres["n"] == 11, kres["n"]
-    print(f"[ok] worksheet kappa = {kres['kappa']:.4f} ({kres['interpretation']}), "
-          f"{kres['annotated']}/{kres['total']} annotated")
-
+    """Runs `pytest -q` from the repo root. Keeps the SMOKE OK sentinel on success."""
+    print("--- pytest -q (metrics + kappa + extraction) ---")
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(REPO_ROOT))
+    if result.returncode != 0:
+        print("\nSMOKE FAILED", file=sys.stderr)
+        return result.returncode
     print("\nSMOKE OK")
     return 0
 
@@ -235,7 +158,8 @@ def cmd_smoke(_args) -> int:
 # ---------------------------------------------------------------------------
 def cmd_worker_smoke(_args) -> int:
     proc = subprocess.Popen(
-        [sys.executable, str(SLAVE_DIR / "worker_node.py")],
+        [sys.executable, "-m", "rbac_benchmark.worker.node"],
+        cwd=str(REPO_ROOT),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(5)
@@ -257,13 +181,13 @@ def cmd_worker_smoke(_args) -> int:
 
 
 # ---------------------------------------------------------------------------
-# seed — write the dashboard data file
+# seed — write the dashboard data files
 # ---------------------------------------------------------------------------
 def cmd_seed(args) -> int:
-    out = Path(args.out) if args.out else (MASTER_DIR / "benchmark_results.json")
+    out = Path(args.out) if args.out else (DATA_DIR / "benchmark_results.json")
     _write_fixture(out)
     # Also seed the Phase-3 κ worksheet so the "Judge Validation (κ)" tab renders.
-    kpath = _write_kappa_fixture(MASTER_DIR / "kappa_samples.json")
+    kpath = _write_kappa_fixture(DATA_DIR / "kappa_samples.json")
     print(f"seeded {out}")
     print(f"seeded {kpath}")
     return 0
@@ -294,19 +218,19 @@ def cmd_shot(args) -> int:
 
     # Seed dashboard data unless told not to.
     if not args.no_seed:
-        _write_fixture(MASTER_DIR / "benchmark_results.json")
-        _write_kappa_fixture(MASTER_DIR / "kappa_samples.json")
+        _write_fixture(DATA_DIR / "benchmark_results.json")
+        _write_kappa_fixture(DATA_DIR / "kappa_samples.json")
 
     SHOT_DIR.mkdir(parents=True, exist_ok=True)
     out = Path(args.out) if args.out else (SHOT_DIR / "dashboard.png")
 
-    # Launch Streamlit headless as a child process.
+    # Launch Streamlit headless as a child process, pointing at the package app.
     env = dict(os.environ)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", "gui_app.py",
+        [sys.executable, "-m", "streamlit", "run", str(APP_PATH),
          "--server.headless", "true", "--server.port", str(args.port),
          "--browser.gatherUsageStats", "false"],
-        cwd=str(MASTER_DIR), env=env,
+        cwd=str(REPO_ROOT), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     driver = None
@@ -353,10 +277,10 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("smoke", help="Direct-invocation metrics smoke test (no GUI/network).")
+    sub.add_parser("smoke", help="Run the pytest suite (no GUI/network).")
     sub.add_parser("worker-smoke", help="Drive the worker UDP discovery handshake.")
 
-    sp_seed = sub.add_parser("seed", help="Write a synthetic benchmark_results.json.")
+    sp_seed = sub.add_parser("seed", help="Write synthetic data/benchmark_results.json + kappa_samples.json.")
     sp_seed.add_argument("--out", default=None)
 
     sp_shot = sub.add_parser("shot", help="Launch Streamlit + Firefox screenshot a tab.")
@@ -365,7 +289,7 @@ def main() -> int:
     sp_shot.add_argument("--out", default=None, help="Screenshot output path.")
     sp_shot.add_argument("--port", type=int, default=8501)
     sp_shot.add_argument("--no-seed", action="store_true",
-                         help="Do not overwrite master/benchmark_results.json.")
+                         help="Do not overwrite data/benchmark_results.json.")
 
     args = p.parse_args()
     return {

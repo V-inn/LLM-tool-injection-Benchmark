@@ -38,14 +38,12 @@ USAGE
 """
 
 import json
-import sys
 from collections import defaultdict
-from pathlib import Path
 
 # Import the set of benign-control injection keys so the analyzer can compute
 # FPR (False Positive Rate) separately from the adversarial immunity rate.
-sys.path.insert(0, str(Path(__file__).parent))
-from config import BENIGN_CONTROL_KEYS
+from rbac_benchmark.core.config import BENIGN_CONTROL_KEYS
+from rbac_benchmark.paths import data_path
 
 
 def analyze_benchmark_results(json_filepath: str):
@@ -414,7 +412,8 @@ def compute_delta_tpr(
     return delta_results
 
 
-if __name__ == "__main__":
+def main():
+    """Console entry point (rbac-analyze) and `python -m` runner."""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -423,24 +422,24 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # Standard aggregate report
-  python analyzer.py benchmark_results.json
+  rbac-analyze benchmark_results.json
 
   # Validate attack strength for the reference model
-  python analyzer.py benchmark_results.json --validate-attacks --ref-model qwen3.5:9b
+  rbac-analyze benchmark_results.json --validate-attacks --ref-model qwen3.5:9b
 
   # Compute delta-TPR relative to S1_BASELINE
-  python analyzer.py benchmark_results.json --delta-tpr --ref-model qwen3.5:9b
+  rbac-analyze benchmark_results.json --delta-tpr --ref-model qwen3.5:9b
 
   # Validate attacks with a custom threshold and baseline
-  python analyzer.py benchmark_results.json --validate-attacks --ref-model qwen3.5:9b \\
+  rbac-analyze benchmark_results.json --validate-attacks --ref-model qwen3.5:9b \\
       --baseline-defense S1_BASELINE --threshold 0.05
 """
     )
     parser.add_argument(
         "filepath",
         nargs="?",
-        default="benchmark_results.json",
-        help="Path to benchmark_results.json (default: benchmark_results.json)",
+        default=data_path("benchmark_results.json"),
+        help="Path to benchmark_results.json (default: <DATA_DIR>/benchmark_results.json)",
     )
     parser.add_argument(
         "--validate-attacks",
@@ -495,4 +494,8 @@ Examples:
         )
     else:
         # Default: run the standard aggregate report
-        analyze_benchmark_results(args.filepath)
+        analyze_benchmark_results(args.filepath)
+
+
+if __name__ == "__main__":
+    main()

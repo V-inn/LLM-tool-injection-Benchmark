@@ -72,9 +72,9 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Tuple
 from ollama import AsyncClient
 
-from config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS
-from prompts import load_all_prompts
-from tools import get_available_tools, create_mock_profile_response
+from rbac_benchmark.core.config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS
+from rbac_benchmark.core.prompts import load_all_prompts
+from rbac_benchmark.core.tools import get_available_tools, create_mock_profile_response
 
 
 @dataclass
@@ -370,7 +370,7 @@ async def judge_worker_consumer(
     so that re-running the judgment on the same results matrix produces consistent
     counts regardless of any previous partial runs.
     """
-    from llm_judge import LLMJudge
+    from rbac_benchmark.evaluation.llm_judge import LLMJudge
     judge = LLMJudge(judge_model=config.judge_model, host=f"http://{worker_ip}:{config.ollama_port}")
     MAX_JUDGE_RETRIES = 3
 
@@ -596,7 +596,8 @@ def parse_arguments():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main_cli():
+    """Console entry point (rbac-master) and `python -m` runner."""
     from datetime import datetime
     # Timestamped log filenames prevent runs from overwriting each other's logs,
     # which is important for reproducibility in a multi-run experimental study.
@@ -615,3 +616,7 @@ if __name__ == "__main__":
         run_config = BenchmarkConfig()
 
     asyncio.run(main(run_config))
+
+
+if __name__ == "__main__":
+    main_cli()

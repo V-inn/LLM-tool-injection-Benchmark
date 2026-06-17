@@ -31,16 +31,13 @@ ENV/
 env.bak/
 venv.bak/
 
-# Project-specific generated files
-master/results.json
-master/benchmark.json
-master/benchmark.log
-master/benchmark_results.json
-master/generated_injections.json
-master/generated_defenses.json
-master/custom_prompts.json
-master/temp_run_config.json
-master/kappa_samples.json
+# Project-specific generated/runtime files (data/ is the single artifact dir).
+# generated_injections.json / generated_defenses.json are tracked seeds and stay in git.
+benchmark_*.log
+data/benchmark_results.json
+data/custom_prompts.json
+data/temp_run_config.json
+data/kappa_samples.json
 
 # IDE / OS
 .vscode/

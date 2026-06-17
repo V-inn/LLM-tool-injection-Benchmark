@@ -52,10 +52,10 @@ import json
 from pathlib import Path
 from typing import Dict, Tuple
 
-# All data files are resolved relative to this module's directory so the code
-# works correctly when master_node.py is invoked from a different working directory
-# (e.g. when launched as a subprocess by the Streamlit GUI).
-_MASTER_DIR = Path(__file__).parent
+# Runtime data files (generated/custom prompts) are resolved through the central
+# DATA_DIR resolver so the code works regardless of the working directory or which
+# subpackage it is invoked from (e.g. as a subprocess launched by the Streamlit GUI).
+from rbac_benchmark.paths import data_path
 
 # The [THOUGHT] directive appended to every system prompt. Keeping it as a constant
 # ensures the wording is identical across all defense variants — any variation could
@@ -171,7 +171,7 @@ def load_all_prompts(
     injection_payloads = BASE_INJECTION_PAYLOADS.copy()
 
     if use_gen_inj:
-        generated_injections_file = _MASTER_DIR / "generated_injections.json"
+        generated_injections_file = Path(data_path("generated_injections.json"))
         if generated_injections_file.exists():
             try:
                 with open(generated_injections_file, "r", encoding="utf-8") as f:
@@ -180,7 +180,7 @@ def load_all_prompts(
                 print(f"[-] Warning: Failed to parse generated_injections.json. Error: {e}")
 
     if use_gen_def:
-        generated_defenses_file = _MASTER_DIR / "generated_defenses.json"
+        generated_defenses_file = Path(data_path("generated_defenses.json"))
         if generated_defenses_file.exists():
             try:
                 with open(generated_defenses_file, "r", encoding="utf-8") as f:
@@ -189,7 +189,7 @@ def load_all_prompts(
                 print(f"[-] Warning: Failed to parse generated_defenses.json. Error: {e}")
 
     if use_custom:
-        custom_prompts_file = _MASTER_DIR / "custom_prompts.json"
+        custom_prompts_file = Path(data_path("custom_prompts.json"))
         if custom_prompts_file.exists():
             try:
                 with open(custom_prompts_file, "r", encoding="utf-8") as f:

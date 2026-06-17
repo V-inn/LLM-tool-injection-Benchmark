@@ -6,13 +6,19 @@ description: Build, launch, screenshot, and drive the Tool-Calling RBAC Resilien
 # Run the Tool-Calling RBAC Resilience Benchmark
 
 A distributed benchmark that stress-tests how local LLMs honour RBAC directives
-under tool-output prompt injection. Three runnable surfaces:
+under tool-output prompt injection. The code is an installable package,
+`rbac_benchmark` (subpackages: `core`, `llm`, `evaluation`, `generation`,
+`orchestration`, `worker`, `ui`). Runnable surfaces:
 
-- **Internal metrics modules** (`master/config.py`, `master/analyzer.py`) — TPR /
-  FPR / delta-TPR / attack-strength. **Most PRs touch this layer.**
-- **Streamlit GUI** (`master/gui_app.py`, "LLM Red Team Benchmark") — the control
-  center + dashboard.
-- **Worker daemon** (`slave/worker_node.py`) — UDP discovery responder.
+- **Internal metrics modules** (`rbac_benchmark/core/config.py`,
+  `rbac_benchmark/evaluation/`) — TPR / FPR / delta-TPR / attack-strength /
+  Cohen's κ. **Most PRs touch this layer.** Covered by `tests/` (pytest).
+- **Streamlit GUI** (`rbac_benchmark/ui/app.py`, "LLM Red Team Benchmark") — thin
+  shell + `ui/data.py`, `ui/charts.py`, `ui/state.py`, `ui/tabs/*.py`.
+- **Worker daemon** (`rbac_benchmark/worker/node.py`) — UDP discovery responder.
+
+Runtime data artifacts (results, generated prompts, kappa worksheet) live in
+`data/` (resolved via `rbac_benchmark/paths.py`; override with `RBAC_DATA_DIR`).
 
 Everything here is driven by **`.claude/skills/run-rbac-benchmark/driver.py`**.
 Paths below are relative to the **repo root**.
@@ -34,11 +40,11 @@ Paths below are relative to the **repo root**.
 A Python 3.11 virtualenv already exists at `.venv/`. Use its interpreter
 directly — **`.venv/Scripts/python.exe`** (Windows) — for every command.
 
-Install the deps the venv is missing (`pyyaml` is in `requirements.txt` but was
-absent; `selenium` is needed only for GUI screenshots):
+Install the package editable (registers the `rbac-*` entry points and pulls deps),
+plus `pytest` (smoke) and `selenium` (GUI screenshots only):
 
 ```bash
-.venv/Scripts/python.exe -m pip install -r requirements.txt selenium
+.venv/Scripts/python.exe -m pip install -e . pytest selenium
 ```
 
 For `shot` (GUI screenshots) you also need **Firefox**. It was found at
@@ -56,10 +62,11 @@ One driver, four subcommands. Run from the repo root.
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py smoke
 ```
 
-Imports `config`/`analyzer`, builds a synthetic `benchmark_results.json`
-fixture, and runs `analyze_benchmark_results`, `compute_delta_tpr`, and
-`validate_attack_strength`. Asserts and prints the reports; ends with
-`SMOKE OK`. This is the fastest way to verify a change to the metrics math.
+Runs `pytest -q` (the `tests/` suite: `InferenceMetrics` accounting, TPR/FPR,
+delta-TPR, attack-strength, Cohen's κ known-value + degenerate cases, and the
+Phase-3 stored-label extraction). Ends with `SMOKE OK`. This is the fastest way to
+verify a change to the metrics math. (`.venv/Scripts/python.exe -m pytest -q` works
+directly too.)
 
 ### 2. Worker daemon smoke (no Ollama)
 
@@ -67,7 +74,7 @@ fixture, and runs `analyze_benchmark_results`, `compute_delta_tpr`, and
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py worker-smoke
 ```
 
-Launches `slave/worker_node.py`, sends `OLLAMA_MASTER_SEEKING` to UDP 5005,
+Launches the worker daemon (`rbac_benchmark/worker/node.py`), sends `OLLAMA_MASTER_SEEKING` to UDP 5005,
 asserts the `OLLAMA_READY` reply, tears the daemon down. Ends with
 `WORKER SMOKE OK`.
 
@@ -84,13 +91,15 @@ asserts the `OLLAMA_READY` reply, tears the daemon down. Ends with
   --out .claude/skills/run-rbac-benchmark/screenshots/dashboard.png
 ```
 
-`shot` seeds `master/benchmark_results.json` with the synthetic fixture, starts
-Streamlit headless on port 8501, waits for `/healthz`, waits for the SPA to
-**hydrate** (the title text appears only after JS runs — a plain one-shot
-screenshot captures a blank shell), optionally clicks a tab, screenshots the
-full page, then kills Streamlit and Firefox. Ends with `SHOT OK -> <path>`.
-Screenshots land in `.claude/skills/run-rbac-benchmark/screenshots/`
-(git-ignored). Pass `--no-seed` to screenshot whatever data is already there.
+`shot` seeds `data/benchmark_results.json` + `data/kappa_samples.json` with the
+synthetic fixtures, starts Streamlit headless (on `rbac_benchmark/ui/app.py`) on
+port 8501, waits for `/healthz`, waits for the SPA to **hydrate** (the title text
+appears only after JS runs — a plain one-shot screenshot captures a blank shell),
+optionally clicks a tab, screenshots the full page, then kills Streamlit and
+Firefox. Ends with `SHOT OK -> <path>`. Screenshots land in
+`.claude/skills/run-rbac-benchmark/screenshots/` (git-ignored). Pass `--no-seed`
+to screenshot whatever data is already there. Tabs: "Control Center", "Payload
+Generation", "Custom Prompts", "Dashboard", "Judge Validation".
 
 ### 4. Seed dashboard data only
 
@@ -98,17 +107,17 @@ Screenshots land in `.claude/skills/run-rbac-benchmark/screenshots/`
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py seed
 ```
 
-Writes `master/benchmark_results.json` (git-ignored) so the dashboard has data
-without a real run. `shot` does this for you.
+Writes `data/benchmark_results.json` + `data/kappa_samples.json` (git-ignored) so
+the dashboard + Judge Validation tab have data without a real run. `shot` does this.
 
 ## Run (human path)
 
-`bash start_master.sh` (Linux) starts Ollama + `streamlit run gui_app.py` and
+`bash start_master.sh` (Linux) starts Ollama + the `rbac-dashboard` entry point and
 opens a browser. Useless headless and assumes Ollama is installed. Cross-platform
 equivalent without Ollama:
 
 ```bash
-cd master && ../.venv/Scripts/python.exe -m streamlit run gui_app.py
+.venv/Scripts/python.exe -m streamlit run rbac_benchmark/ui/app.py
 ```
 
 Then open http://localhost:8501. The sidebar will show a red "Failed to connect
@@ -117,24 +126,26 @@ results. Ctrl-C to stop.
 
 ## Direct invocation
 
-The analyzer is also a standalone CLI (what `smoke` calls under the hood):
+The analyzer and kappa modules are standalone CLIs (entry points after
+`pip install -e .`; the `python -m` form works without install too):
 
 ```bash
-cd master
-../.venv/Scripts/python.exe analyzer.py benchmark_results.json                       # aggregate TPR/FPR report
-../.venv/Scripts/python.exe analyzer.py benchmark_results.json --delta-tpr           # marginal defense gain
-../.venv/Scripts/python.exe analyzer.py benchmark_results.json --validate-attacks    # Phase 2 attack strength
+rbac-analyze data/benchmark_results.json                    # aggregate TPR/FPR report
+rbac-analyze data/benchmark_results.json --delta-tpr        # marginal defense gain
+rbac-analyze data/benchmark_results.json --validate-attacks # Phase 2 attack strength
+rbac-kappa   data/kappa_samples.json                        # Phase 3 Cohen's κ (offline)
+# equivalently: .venv/Scripts/python.exe -m rbac_benchmark.evaluation.analyzer ...
 ```
 
 Results JSON shape: keys are `"Model | Defense | Attack"`, values are
-`config.InferenceMetrics` field dicts. `master/benchmark_results.json` is
+`core.config.InferenceMetrics` field dicts. `data/benchmark_results.json` is
 git-ignored; use `driver.py seed` to (re)create one.
 
 ## Test
 
-There is no formal test suite in this repo. `driver.py smoke` is the closest
-thing to one and is the recommended sanity check after editing the metrics
-modules.
+`tests/` is a pytest suite covering the metric / extraction / κ math. Run it with
+`.venv/Scripts/python.exe -m pytest -q` (or `driver.py smoke`, which wraps it). It
+is the recommended sanity check after editing any `core`/`evaluation` module.
 
 ## Gotchas
 
@@ -148,13 +159,13 @@ modules.
   hardcoded model list, so the GUI launches and renders without Ollama. A real
   benchmark *run* (clicking "Run Benchmark") still needs Ollama + models and is
   not exercised here.
-- **`pyyaml` missing from the venv** despite being in `requirements.txt` — imports
-  of `config.from_yaml` (and anything importing yaml) fail until you
-  `pip install pyyaml`.
-- **Modules import each other by bare name** (`import config`), so direct
-  invocation requires `master/` on `sys.path` (run from inside `master/`, or let
-  `driver.py` insert it).
-- **`analyzer.py` argparse uses `--baseline-defense`**, not `--baseline`
+- **`pyyaml` missing from the venv** despite being a dependency — imports of
+  `core.config.from_yaml` (and anything importing yaml) fail until you
+  `pip install pyyaml` (or re-run `pip install -e .`).
+- **Modules use absolute package imports** (`from rbac_benchmark.core.config import …`),
+  so the package must be importable: `pip install -e .`, or run from the repo root
+  (which puts `rbac_benchmark` on `sys.path`). No more `cd master`.
+- **`rbac-analyze` argparse uses `--baseline-defense`**, not `--baseline`
   (prefix-matching lets `--baseline` work too, but the real flag is the long one).
 - **`start_master.sh` / `start_worker.sh` are Linux-only** (`pkill`, `ollama serve`,
   `xdg-open` for the cat GIF). Don't run them on Windows; launch Streamlit
@@ -162,6 +173,7 @@ modules.
 
 ## Troubleshooting
 
+- `ModuleNotFoundError: No module named 'rbac_benchmark'` → `.venv/Scripts/python.exe -m pip install -e .` (or run from the repo root).
 - `ModuleNotFoundError: No module named 'yaml'` → `.venv/Scripts/python.exe -m pip install pyyaml`.
 - `ModuleNotFoundError: No module named 'selenium'` → `... pip install selenium` (only needed for `shot`).
 - `shot` produces a blank/dark image → you bypassed the hydration wait; use

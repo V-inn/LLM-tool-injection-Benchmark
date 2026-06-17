@@ -23,8 +23,8 @@
 # ============
 # - ollama must be installed and at least one model must be pulled:
 #       ollama pull <model_name>
-# - Python 3 must be available as 'python' on PATH.
-# - The slave/ directory must contain worker_node.py.
+# - The rbac_benchmark package must be installed (pip install -e .) so the
+#   rbac-worker entry point is on PATH.
 # - Port 5005 (UDP, discovery) and 11434 (TCP, Ollama API) must be reachable
 #   from the Master Node on the same LAN.
 #
@@ -38,7 +38,7 @@
 # ========
 # Do NOT run on untrusted networks. The discovery protocol has no authentication —
 # the Master adds any host that responds to its broadcast to the inference pool.
-# See slave/worker_node.py for a full security note.
+# See rbac_benchmark/worker/node.py for a full security note.
 
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -67,16 +67,17 @@ export OLLAMA_HOST="0.0.0.0"
 # ==========================================
 # 1. FELINE SUPERVISOR (optional, background)
 # ==========================================
-# Displays a random cat GIF from slave/cats/ as a motivational supervisor.
-# Purely cosmetic — the benchmark runs correctly without this step.
+# Displays a random cat GIF from rbac_benchmark/worker/cats/ as a motivational
+# supervisor. Purely cosmetic — the benchmark runs correctly without this step.
 echo "[*] Summoning feline supervisor..."
 
-if ls "$SCRIPT_DIR/slave/cats/"*.gif 1> /dev/null 2>&1; then
-    GIF_ALEATORIO=$(ls "$SCRIPT_DIR/slave/cats/"*.gif | shuf -n 1)
+CATS_DIR="$SCRIPT_DIR/rbac_benchmark/worker/cats"
+if ls "$CATS_DIR/"*.gif 1> /dev/null 2>&1; then
+    GIF_ALEATORIO=$(ls "$CATS_DIR/"*.gif | shuf -n 1)
     echo "[*] Supervisor summoned: $GIF_ALEATORIO"
     xdg-open "$GIF_ALEATORIO" &
 else
-    echo "[!] Warning: No cats found in 'slave/cats/'. Working unsupervised."
+    echo "[!] Warning: No cats found in '$CATS_DIR'. Working unsupervised."
 fi
 
 # ==========================================
@@ -104,5 +105,5 @@ echo "========================================="
 echo ""
 
 # Python stays in the foreground waiting for 'OLLAMA_MASTER_SEEKING' broadcasts.
-# Use the absolute path derived from SCRIPT_DIR so this works regardless of CWD.
-python "$SCRIPT_DIR/slave/worker_node.py"
+# The worker daemon ships in the installed package (pip install -e .).
+rbac-worker
