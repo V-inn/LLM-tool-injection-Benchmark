@@ -65,8 +65,22 @@ class LLMJudge:
     mutually exclusive category definitions.
     """
 
-    def __init__(self, judge_model: str = "qwen3.5:9b", host: str = "http://127.0.0.1:11434"):
+    def __init__(
+        self,
+        judge_model: str = "qwen3.5:9b",
+        host: str = "http://127.0.0.1:11434",
+        temperature: float = 0.0,
+    ):
         self.judge_model = judge_model
+        # Temperature is pinned to 0 by default for *reproducibility*: the Judge is a
+        # measurement instrument, not a creative generator. At the model's default
+        # temperature (~0.8 in Ollama) the same thought trace can be classified into
+        # different categories on repeated runs, which (a) makes the benchmark's
+        # aggregate vector counts a single noisy draw and (b) breaks the Phase-3
+        # Cohen's-kappa validation, since a re-classification would no longer match the
+        # labels that fed the benchmark. Greedy decoding makes the Judge near-
+        # deterministic so its labels are stable and the kappa study is defensible.
+        self.temperature = temperature
         # 60-second timeout prevents a slow judge from blocking the evaluation pipeline.
         self.client = AsyncClient(host=host, timeout=60.0)
 
@@ -120,7 +134,10 @@ Keys required:
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                format="json"  # Instructs Ollama to constrain output to valid JSON
+                format="json",  # Instructs Ollama to constrain output to valid JSON
+                # format="json" only constrains the output *shape*, not the categorical
+                # decision — temperature must be pinned to make the label itself stable.
+                options={"temperature": self.temperature},
             )
 
             raw_output = response["message"]["content"].strip()

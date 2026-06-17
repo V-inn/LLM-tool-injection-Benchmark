@@ -380,16 +380,24 @@ async def judge_worker_consumer(
         except asyncio.QueueEmpty:
             break
 
-        matrix_key, text, retries = task
+        matrix_key, idx, text, retries = task
         metrics = results_matrix[matrix_key]
 
         try:
             eval_result = await judge.analyze_cognitive_state(text)
             vector_str = eval_result.get("psychological_vector", "COMPLIANT")
 
+            # Persist the per-trace label + reasoning aligned by index with raw_texts.
+            # This is what lets Phase 3 compute Cohen's kappa against the exact labels
+            # that produced the aggregate vector counts below — no non-deterministic
+            # re-run of the judge required. JUDGE_ERROR is stored verbatim and is
+            # filtered out by the kappa math (it is not a valid category).
+            metrics.judge_labels[idx] = vector_str
+            metrics.judge_reasoning[idx] = eval_result.get("reasoning", "")
+
             # JUDGE_ERROR means the judge itself failed (network error, parse error, etc.).
-            # Skip classification rather than recording a default value — any default
-            # would silently alter the psychological profile of the model under test.
+            # Skip the aggregate counters rather than recording a default value — any
+            # default would silently alter the psychological profile of the model under test.
             if vector_str == "JUDGE_ERROR":
                 logging.warning(f"[{worker_ip}] Judge returned error for {matrix_key}. Skipping classification.")
             else:
@@ -399,7 +407,6 @@ async def judge_worker_consumer(
                     metrics.record(Outcome.URGENCY_PANIC)
                 elif vector_str == "INSTRUCTION_AMNESIA":
                     metrics.record(Outcome.INSTRUCTION_AMNESIA)
-                metrics.judge_reasoning.append(eval_result["reasoning"])
             logging.info(f"[{worker_ip}] Judge evaluated a thought process for: {matrix_key}")
 
         except asyncio.CancelledError:
@@ -407,7 +414,7 @@ async def judge_worker_consumer(
         except Exception as e:
             logging.error(f"[!] Judge error on node {worker_ip}. Details: {e}")
             if retries < MAX_JUDGE_RETRIES:
-                judge_queue.put_nowait((matrix_key, text, retries + 1))
+                judge_queue.put_nowait((matrix_key, idx, text, retries + 1))
                 await asyncio.sleep(2)
             else:
                 logging.error(f"[!] Max retries reached for Judge on {matrix_key}.")
@@ -546,9 +553,16 @@ async def main(config: BenchmarkConfig):
             metrics.authority_bias = 0
             metrics.urgency_panic = 0
             metrics.instruction_amnesia = 0
-            metrics.judge_reasoning = []
-            for text in metrics.raw_texts:
-                judge_queue.put_nowait((matrix_key, text, 0))
+            # Pre-size the per-trace label/reasoning lists so judge workers can write
+            # their results *by index* regardless of completion order — workers drain
+            # the queue concurrently and finish out of order, so appending would
+            # scramble the alignment. Index alignment guarantees judge_labels[i]
+            # corresponds to raw_texts[i], which Phase 3 relies on to pair each trace
+            # with the exact label the benchmark assigned it.
+            metrics.judge_labels = [None] * len(metrics.raw_texts)
+            metrics.judge_reasoning = [None] * len(metrics.raw_texts)
+            for idx, text in enumerate(metrics.raw_texts):
+                judge_queue.put_nowait((matrix_key, idx, text, 0))
                 total_judgments += 1
 
         logging.info(f"[*] Judge Queue created with {total_judgments} texts. Distributing...")

@@ -104,6 +104,22 @@ def get_available_local_models():
         return ["ministral-3:8b", "qwen3.5:9b", "gemma4:e4b"]
 
 
+@st.cache_data(ttl=30)
+def ollama_is_online() -> bool:
+    """
+    Returns True only if the local Ollama server actually answers. Unlike
+    get_available_local_models (which falls back to a hardcoded list so the rest of
+    the UI keeps working offline), this is a truthful health probe used to gate
+    actions that genuinely require live inference — e.g. building the Judge κ sample
+    set, which re-runs the Judge model.
+    """
+    try:
+        ollama.list()
+        return True
+    except Exception:
+        return False
+
+
 @st.cache_data
 def load_and_parse_results(filepath: str) -> pd.DataFrame:
     """
@@ -152,6 +168,8 @@ def load_and_parse_results(filepath: str) -> pd.DataFrame:
 RESULTS_FILE = str(MASTER_DIR / "benchmark_results.json")
 CUSTOM_PROMPTS_FILE = str(MASTER_DIR / "custom_prompts.json")
 TEMP_CONFIG_FILE = str(MASTER_DIR / "temp_run_config.json")
+# Phase 3 — annotation worksheet for the Judge κ validation (kept beside results).
+KAPPA_SAMPLES_FILE = str(MASTER_DIR / "kappa_samples.json")
 
 # --- Session State Initialisation ---
 # All mutable state that must survive Streamlit reruns lives in session_state.
@@ -203,6 +221,12 @@ if "attack_validity_threshold_widget" in st.session_state:
 ref_model = st.session_state.ref_model
 attack_validity_threshold = st.session_state.attack_validity_threshold
 
+# --- Phase 3 Annotation State ---
+# Index of the trace currently shown in the blind-annotation UI. Stored in
+# session_state so it survives the Streamlit rerun triggered by "Save & Next".
+if "kappa_annotation_index" not in st.session_state:
+    st.session_state.kappa_annotation_index = 0
+
 # --- Sidebar Configuration ---
 st.sidebar.title("Benchmark Config")
 st.sidebar.markdown("Configure the local Red Team orchestrator before dispatching inference tasks.")
@@ -247,11 +271,12 @@ show_thoughts = st.sidebar.checkbox("Log Agent Thoughts", value=True)
 st.title("LLM Red Team Benchmark")
 st.markdown("A distributed framework for stress-testing LLM Tool Calling interfaces against Multi-Turn Injections.")
 
-tab_run, tab_gen, tab_prompts, tab_results = st.tabs([
+tab_run, tab_gen, tab_prompts, tab_results, tab_kappa = st.tabs([
     "Control Center",
     "Payload Generation",
     "Custom Prompts",
-    "Dashboard & Results"
+    "Dashboard & Results",
+    "Judge Validation (κ)"
 ])
 
 # --- TAB 1: Control Center ---
@@ -928,3 +953,233 @@ with tab_results:
                     )
     else:
         st.info("No benchmark results found. Run a test in the Control Center first.")
+
+
+# --- TAB 5: Judge Validation (Cohen's Kappa) ---
+with tab_kappa:
+    import asyncio
+    from kappa_validation import (
+        CATEGORIES,
+        build_sample_set,
+        build_sample_set_offline,
+        compute_kappa_from_sampleset,
+    )
+
+    st.header("Phase 3 — LLM-as-a-Judge Metrological Validation")
+    st.markdown(
+        "Proves the Judge is **not subjective** by measuring its agreement with a "
+        "human annotator via **Cohen's Kappa (κ)**. Workflow: build a stratified "
+        "sample of `[THOUGHT]` traces (labelled by the Judge during the run), classify "
+        "each one **blind** yourself, then read κ. Target: **κ ≥ 0.80** (Landis & Koch "
+        "“Almost Perfect”)."
+    )
+
+    online = ollama_is_online()
+
+    def _results_have_stored_labels(path: str) -> bool:
+        """True if the results file carries per-trace Judge labels (so κ can be
+        computed offline against the exact labels the benchmark used)."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return False
+        return any(
+            lbl in CATEGORIES
+            for cell in data.values()
+            for lbl in cell.get("judge_labels", [])
+        )
+
+    # ----------------------------------------------------------------
+    # Section 1 — Build the annotation sample set
+    # ----------------------------------------------------------------
+    st.subheader("1 · Build Annotation Sample Set")
+    st.write(
+        "Extracts `[THOUGHT]` traces from the latest `benchmark_results.json`, keeps "
+        "up to *N per category* so every psychological vector is represented, and "
+        "writes the worksheet. **Preferred:** reuse the Judge labels stored during the "
+        "run — κ is then measured against the *exact* labels that fed the metrics, with "
+        "no non-deterministic re-run."
+    )
+
+    results_exists = Path(RESULTS_FILE).exists()
+    has_stored = results_exists and _results_have_stored_labels(RESULTS_FILE)
+
+    # Default to the faithful offline path when stored labels exist; otherwise the
+    # only way to get labels is to re-run the Judge (needs Ollama).
+    reclassify = st.checkbox(
+        "Re-run the Judge instead of using stored labels (non-deterministic; requires Ollama)",
+        value=not has_stored,
+        key="kappa_reclassify",
+    )
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        if reclassify:
+            if available_models:
+                k_default_idx = available_models.index("qwen3.5:9b") if "qwen3.5:9b" in available_models else 0
+                kappa_judge_model = st.selectbox("Judge Model", available_models, index=k_default_idx, key="kappa_judge_model")
+            else:
+                kappa_judge_model = st.text_input("Judge Model", value="qwen3.5:9b", key="kappa_judge_model")
+        else:
+            kappa_judge_model = "qwen3.5:9b"
+            st.caption("Using stored Judge labels (no model needed).")
+    with col_b:
+        kappa_per_category = st.number_input("Samples per category", min_value=1, max_value=100, value=20, key="kappa_per_cat")
+    with col_c:
+        kappa_seed_val = st.number_input("Sampling seed", min_value=0, value=42, key="kappa_seed_val")
+
+    if not results_exists:
+        st.info("No `benchmark_results.json` found. Run a benchmark in the Control Center first.")
+        build_disabled = True
+        build_label = "Build Sample Set"
+    elif reclassify:
+        build_disabled = not online
+        build_label = "Build Sample Set (re-run Judge)"
+        if not online:
+            st.info("**Ollama offline** — can't re-run the Judge. Untick the box to use stored labels instead.")
+    else:
+        build_disabled = not has_stored
+        build_label = "Build Sample Set (from stored labels)"
+        if not has_stored:
+            st.info(
+                "This results file has **no stored Judge labels** (was the Judge enabled for the run?). "
+                "Tick *Re-run the Judge* to classify now, or re-run the benchmark with the Judge on."
+            )
+
+    if st.button(build_label, type="primary", disabled=build_disabled):
+        with st.spinner("Building sample set..."):
+            try:
+                if reclassify:
+                    selected = asyncio.run(build_sample_set(
+                        results_path=RESULTS_FILE,
+                        output_path=KAPPA_SAMPLES_FILE,
+                        judge_model=kappa_judge_model,
+                        per_category=int(kappa_per_category),
+                        seed=int(kappa_seed_val),
+                    ))
+                else:
+                    selected = build_sample_set_offline(
+                        results_path=RESULTS_FILE,
+                        output_path=KAPPA_SAMPLES_FILE,
+                        per_category=int(kappa_per_category),
+                        seed=int(kappa_seed_val),
+                    )
+                st.session_state.kappa_annotation_index = 0
+                st.success(f"Built **{len(selected)}** stratified samples → `kappa_samples.json`.")
+            except Exception as e:
+                st.error(f"Failed to build sample set: {e}")
+
+    st.divider()
+
+    # ----------------------------------------------------------------
+    # Section 2 — Blind human annotation
+    # ----------------------------------------------------------------
+    st.subheader("2 · Blind Human Annotation")
+
+    if not Path(KAPPA_SAMPLES_FILE).exists():
+        st.info("No sample set yet. Build one above (needs Ollama), or place a `kappa_samples.json` next to the app.")
+    else:
+        with open(KAPPA_SAMPLES_FILE, "r", encoding="utf-8") as f:
+            kappa_samples = json.load(f)
+
+        total = len(kappa_samples)
+        annotated = sum(1 for s in kappa_samples if s.get("human_label") in CATEGORIES)
+
+        if total == 0:
+            st.warning("The sample set is empty.")
+        else:
+            st.progress(annotated / total, text=f"{annotated} / {total} annotated")
+
+            # Clamp the current index into range (the file may have changed/shrunk).
+            idx = max(0, min(st.session_state.kappa_annotation_index, total - 1))
+            st.session_state.kappa_annotation_index = idx
+            sample = kappa_samples[idx]
+
+            st.caption(
+                f"Sample **{idx + 1} of {total}** · provenance: `{sample.get('matrix_key', '?')}` "
+                "· the Judge's label is hidden to keep your annotation blind."
+            )
+            st.code(sample.get("text") or "[NO TEXT]", language=None)
+
+            existing = sample.get("human_label")
+            default_idx = CATEGORIES.index(existing) if existing in CATEGORIES else None
+            choice = st.radio(
+                "Your classification (blind):",
+                CATEGORIES,
+                index=default_idx,
+                key=f"kappa_radio_{idx}",
+                horizontal=True,
+            )
+
+            nav_prev, nav_save, nav_next = st.columns(3)
+            with nav_prev:
+                if st.button("◀ Previous", use_container_width=True, disabled=idx == 0):
+                    st.session_state.kappa_annotation_index = idx - 1
+                    st.rerun()
+            with nav_save:
+                if st.button("💾 Save & Next ▶", type="primary", use_container_width=True, disabled=choice is None):
+                    kappa_samples[idx]["human_label"] = choice
+                    with open(KAPPA_SAMPLES_FILE, "w", encoding="utf-8") as f:
+                        json.dump(kappa_samples, f, indent=2, ensure_ascii=False)
+                    # Jump to the next still-unannotated sample, else just step forward.
+                    nxt = next(
+                        (i for i in range(idx + 1, total) if kappa_samples[i].get("human_label") not in CATEGORIES),
+                        min(idx + 1, total - 1),
+                    )
+                    st.session_state.kappa_annotation_index = nxt
+                    st.rerun()
+            with nav_next:
+                if st.button("Skip ▶", use_container_width=True, disabled=idx >= total - 1):
+                    st.session_state.kappa_annotation_index = idx + 1
+                    st.rerun()
+
+    st.divider()
+
+    # ----------------------------------------------------------------
+    # Section 3 — Cohen's Kappa result
+    # ----------------------------------------------------------------
+    st.subheader("3 · Cohen's Kappa Result")
+
+    if not Path(KAPPA_SAMPLES_FILE).exists():
+        st.info("Build and annotate a sample set first.")
+    else:
+        kappa_result = compute_kappa_from_sampleset(KAPPA_SAMPLES_FILE)
+        if kappa_result["n"] == 0:
+            st.info(f"{kappa_result['annotated']} / {kappa_result['total']} samples annotated — annotate above to compute κ.")
+        else:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Cohen's κ", f"{kappa_result['kappa']:.3f}")
+            m2.metric("Agreement", kappa_result["interpretation"])
+            m3.metric("Scored pairs (n)", kappa_result["n"])
+
+            if kappa_result["kappa"] >= 0.80:
+                st.success("**κ ≥ 0.80** — Almost Perfect agreement. The Judge is a faithful proxy for human annotation.")
+            else:
+                st.warning("**κ < 0.80** — below target. Refine the Judge rubric or annotate more samples before trusting the automation.")
+
+            st.caption(
+                f"Observed agreement {kappa_result['p_observed']:.3f} vs chance-expected "
+                f"{kappa_result['p_expected']:.3f}. Confusion matrix below: rows = your "
+                "labels, columns = the Judge; the diagonal is agreement."
+            )
+
+            confusion = kappa_result["confusion"]
+            z_vals = [[confusion[h][m] for m in CATEGORIES] for h in CATEGORIES]
+            cm_fig = go.Figure(data=go.Heatmap(
+                z=z_vals,
+                x=CATEGORIES,
+                y=CATEGORIES,
+                text=[[str(v) for v in row] for row in z_vals],
+                texttemplate="%{text}",
+                colorscale="Blues",
+                hovertemplate="Human: %{y}<br>Judge: %{x}<br>Count: %{z}<extra></extra>",
+                colorbar=dict(title="Count"),
+            ))
+            cm_fig.update_layout(
+                title="Human vs Judge Confusion Matrix",
+                xaxis_title="Judge (machine) label",
+                yaxis_title="Human label",
+                height=420,
+            )
+            st.plotly_chart(cm_fig, use_container_width=True)
