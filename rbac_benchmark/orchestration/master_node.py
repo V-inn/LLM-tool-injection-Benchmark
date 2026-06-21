@@ -72,7 +72,7 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Tuple
 from ollama import AsyncClient
 
-from rbac_benchmark.core.config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS
+from rbac_benchmark.core.config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS, JUDGE_ERROR
 from rbac_benchmark.core.prompts import load_all_prompts
 from rbac_benchmark.core.tools import get_available_tools, create_mock_profile_response
 
@@ -388,28 +388,26 @@ async def judge_worker_consumer(
 
         try:
             eval_result = await judge.analyze_cognitive_state(text)
-            vector_str = eval_result.get("psychological_vector", "COMPLIANT")
+            awareness = eval_result.get("awareness", "NAIVE_COMPLIANCE")
+            lever = eval_result.get("manipulation_lever", "NONE")
 
-            # Persist the per-trace label + reasoning aligned by index with raw_texts.
-            # This is what lets Phase 3 compute Cohen's kappa against the exact labels
-            # that produced the aggregate vector counts below — no non-deterministic
+            # Persist both per-trace labels + reasoning aligned by index with raw_texts.
+            # This is what lets Phase 3 compute Cohen's kappa (per axis) against the exact
+            # labels that produced the aggregate counts below — no non-deterministic
             # re-run of the judge required. JUDGE_ERROR is stored verbatim and is
             # filtered out by the kappa math (it is not a valid category).
-            metrics.judge_labels[idx] = vector_str
+            metrics.judge_awareness_labels[idx] = awareness
+            metrics.judge_lever_labels[idx] = lever
             metrics.judge_reasoning[idx] = eval_result.get("reasoning", "")
 
             # JUDGE_ERROR means the judge itself failed (network error, parse error, etc.).
             # Skip the aggregate counters rather than recording a default value — any
             # default would silently alter the psychological profile of the model under test.
-            if vector_str == "JUDGE_ERROR":
+            if awareness == JUDGE_ERROR or lever == JUDGE_ERROR:
                 logging.warning(f"[{worker_ip}] Judge returned error for {matrix_key}. Skipping classification.")
             else:
-                if vector_str == "AUTHORITY_BIAS":
-                    metrics.record(Outcome.AUTHORITY_BIAS)
-                elif vector_str == "URGENCY_PANIC":
-                    metrics.record(Outcome.URGENCY_PANIC)
-                elif vector_str == "INSTRUCTION_AMNESIA":
-                    metrics.record(Outcome.INSTRUCTION_AMNESIA)
+                metrics.record_awareness(awareness)
+                metrics.record_lever(lever)
             logging.info(f"[{worker_ip}] Judge evaluated a thought process for: {matrix_key}")
 
         except asyncio.CancelledError:
@@ -550,19 +548,21 @@ async def main(config: BenchmarkConfig):
         total_judgments = 0
 
         # Populate the judge queue with all raw_texts collected during inference.
-        # Reset psychological counters first so re-running judgment on an existing
-        # results matrix produces consistent output.
+        # Reset both psychological axes' counters first so re-running judgment on an
+        # existing results matrix produces consistent output.
         for matrix_key, metrics in results_matrix.items():
-            metrics.authority_bias = 0
-            metrics.urgency_panic = 0
-            metrics.instruction_amnesia = 0
+            for attr in InferenceMetrics._AWARENESS_ATTR.values():
+                setattr(metrics, attr, 0)
+            for attr in InferenceMetrics._LEVER_ATTR.values():
+                setattr(metrics, attr, 0)
             # Pre-size the per-trace label/reasoning lists so judge workers can write
             # their results *by index* regardless of completion order — workers drain
             # the queue concurrently and finish out of order, so appending would
-            # scramble the alignment. Index alignment guarantees judge_labels[i]
+            # scramble the alignment. Index alignment guarantees judge_*_labels[i]
             # corresponds to raw_texts[i], which Phase 3 relies on to pair each trace
-            # with the exact label the benchmark assigned it.
-            metrics.judge_labels = [None] * len(metrics.raw_texts)
+            # with the exact labels the benchmark assigned it.
+            metrics.judge_awareness_labels = [None] * len(metrics.raw_texts)
+            metrics.judge_lever_labels = [None] * len(metrics.raw_texts)
             metrics.judge_reasoning = [None] * len(metrics.raw_texts)
             for idx, text in enumerate(metrics.raw_texts):
                 judge_queue.put_nowait((matrix_key, idx, text, 0))

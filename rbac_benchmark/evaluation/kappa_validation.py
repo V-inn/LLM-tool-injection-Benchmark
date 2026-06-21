@@ -50,6 +50,9 @@ The Ollama-dependent import (llm_judge) is kept *inside* the functions that need
 so the offline κ path — and any module that only wants the κ math — never pays the
 ollama import cost or fails when ollama is absent.
 
+κ is computed PER AXIS (awareness and manipulation_lever), because the Judge now grades
+each trace on two orthogonal axes. Each axis must clear the κ ≥ 0.80 target on its own.
+
 SAMPLE-SET FILE FORMAT (kappa_samples.json)
 ===========================================
 A JSON list of records:
@@ -60,10 +63,14 @@ A JSON list of records:
       "defense":          str,
       "attack":           str,
       "text":             str,      # the raw [THOUGHT] trace
-      "machine_label":    str,      # Judge classification (one of CATEGORIES)
+      "machine_awareness":str,      # Judge Axis-A label (one of AWARENESS_CATEGORIES)
+      "machine_lever":    str,      # Judge Axis-B label (one of LEVER_CATEGORIES)
       "machine_reasoning":str,      # Judge's one-sentence justification
-      "human_label":      str|null  # filled in by the human annotator (blind)
+      "human_awareness":  str|null, # filled in by the human annotator (blind)
+      "human_lever":      str|null  # filled in by the human annotator (blind)
     }
+Old single-axis worksheets (machine_label / human_label) are still read via a
+legacy mapping so previously annotated files keep working.
 """
 from __future__ import annotations
 
@@ -71,18 +78,18 @@ import json
 import random
 import sys
 
+from rbac_benchmark.core.config import (
+    AWARENESS_CATEGORIES,
+    LEVER_CATEGORIES,
+    legacy_vector_to_axes,
+)
 from rbac_benchmark.paths import data_path
 
-# The four mutually exclusive categories the Judge and the human both choose from.
-# These mirror the LLM Judge rubric in llm_judge.py and the Outcome vector enum in
-# config.py. Kept as a module constant so the κ computation, stratification, and the
-# GUI radio buttons all draw from a single source of truth.
-CATEGORIES: list[str] = [
-    "AUTHORITY_BIAS",
-    "URGENCY_PANIC",
-    "INSTRUCTION_AMNESIA",
-    "COMPLIANT",
-]
+# The category universes the Judge and the human both choose from, per axis. Sourced
+# from core.config so the κ computation, stratification, and the GUI radio buttons all
+# draw from a single source of truth. CATEGORIES is kept as a deprecated alias (= the
+# awareness axis) for any external importer that predates the two-axis split.
+CATEGORIES: list[str] = AWARENESS_CATEGORIES
 
 # Default location of the persisted annotation worksheet, resolved through the central
 # DATA_DIR so it works regardless of the launch CWD or invoking subpackage.
@@ -104,17 +111,19 @@ def extract_thought_samples(results_path: str) -> list[dict]:
     ("[NO TEXT GENERATED - SILENT EXECUTION]") is kept — it is a legitimate,
     human-classifiable signal (Instruction Amnesia), not noise.
 
-    `judge_labels` / `judge_reasoning` are read by index, aligned with `raw_texts`
-    (see master_node.py). When a results file predates per-trace label persistence
-    (or the Judge was disabled), `machine_label` is None and the caller must
-    re-classify (the online path) before computing κ.
+    The per-trace axis labels (`judge_awareness_labels` / `judge_lever_labels`) are read
+    by index, aligned with `raw_texts` (see master_node.py). For OLD result files that
+    only carry the legacy single `judge_labels`, each label is mapped onto the two axes
+    via legacy_vector_to_axes so previously-run benchmarks still build a worksheet. When
+    a results file predates per-trace label persistence (or the Judge was disabled), the
+    machine labels are None and the caller must re-classify (the online path) first.
 
     The matrix key is parsed exactly as analyzer.py does (split on " | ") so a
     malformed key is skipped rather than crashing the extraction.
 
-    Returns a list of dicts with keys: sample_id, matrix_key, model, defense,
-    attack, text, machine_label, machine_reasoning. sample_id is a stable 0-based
-    index over the emitted order.
+    Returns a list of dicts with keys: sample_id, matrix_key, model, defense, attack,
+    text, machine_awareness, machine_lever, machine_reasoning. sample_id is a stable
+    0-based index over the emitted order.
     """
     with open(results_path, "r", encoding="utf-8") as f:
         benchmark_data = json.load(f)
@@ -127,9 +136,17 @@ def extract_thought_samples(results_path: str) -> list[dict]:
             continue
         model, defense, attack = parts
         raw_texts = metrics.get("raw_texts", [])
-        labels = metrics.get("judge_labels", [])
+        aware = metrics.get("judge_awareness_labels", [])
+        lever = metrics.get("judge_lever_labels", [])
+        legacy = metrics.get("judge_labels", [])  # old single-axis labels
         reasons = metrics.get("judge_reasoning", [])
         for i, text in enumerate(raw_texts):
+            machine_awareness = aware[i] if i < len(aware) else None
+            machine_lever = lever[i] if i < len(lever) else None
+            # Back-compat: derive both axes from the legacy vector when the new
+            # per-axis labels are absent.
+            if machine_awareness is None and machine_lever is None and i < len(legacy):
+                machine_awareness, machine_lever = legacy_vector_to_axes(legacy[i])
             samples.append({
                 "sample_id":         sample_id,
                 "matrix_key":        key,
@@ -137,7 +154,8 @@ def extract_thought_samples(results_path: str) -> list[dict]:
                 "defense":           defense,
                 "attack":            attack,
                 "text":              text,
-                "machine_label":     labels[i] if i < len(labels) else None,
+                "machine_awareness": machine_awareness,
+                "machine_lever":     machine_lever,
                 "machine_reasoning": (reasons[i] if i < len(reasons) else "") or "",
             })
             sample_id += 1
@@ -161,12 +179,12 @@ async def classify_samples(
     validates the *exact same* judging behaviour used in the full benchmark, not a
     re-implementation that could drift from it.
 
-    Samples whose Judge call fails are labelled "JUDGE_ERROR"; the caller can filter
-    these out before stratifying / computing κ so a flaky judge call never silently
-    becomes a real category.
+    Samples whose Judge call fails are labelled "JUDGE_ERROR" on both axes; the caller
+    can filter these out before stratifying / computing κ so a flaky judge call never
+    silently becomes a real category.
 
-    Returns the same list, with `machine_label` and `machine_reasoning` added to a
-    shallow copy of each record (input is not mutated).
+    Returns the same list, with `machine_awareness`, `machine_lever` and
+    `machine_reasoning` added to a shallow copy of each record (input is not mutated).
     """
     # Imported here, not at module top, so the offline κ path never requires ollama.
     from rbac_benchmark.evaluation.llm_judge import LLMJudge
@@ -176,7 +194,8 @@ async def classify_samples(
     for sample in samples:
         result = await judge.analyze_cognitive_state(sample["text"])
         record = dict(sample)
-        record["machine_label"] = result.get("psychological_vector", "JUDGE_ERROR")
+        record["machine_awareness"] = result.get("awareness", "JUDGE_ERROR")
+        record["machine_lever"] = result.get("manipulation_lever", "JUDGE_ERROR")
         record["machine_reasoning"] = result.get("reasoning", "")
         labeled.append(record)
     return labeled
@@ -192,34 +211,35 @@ def stratify_samples(
     seed: int = 42,
 ) -> list[dict]:
     """
-    Selects a stratified subset of `labeled` so each of the four CATEGORIES is
-    represented by up to `per_category` traces (capping the total near 50–100, as
-    the protocol requires).
+    Selects a stratified subset of `labeled` so each AWARENESS category is represented
+    by up to `per_category` traces (capping the total near 50–100, as the protocol
+    requires). The awareness axis is used as the stratification key because it is the
+    primary, payload-independent axis; the lever label is carried along for each sample.
 
     Stratifying by the *machine* label is intentional: it is the only label available
-    at sampling time, and balancing on it guarantees the human annotator sees a mix
-    of every category — without that, a model that rarely panics would yield almost
-    no URGENCY_PANIC samples and κ would be dominated by (or undefined on) the
-    majority class. The human still annotates blind, so using the machine label to
-    *select* the sample does not bias the *agreement* measurement.
+    at sampling time, and balancing on it guarantees the human annotator sees a mix of
+    every category — without that, a rarely-occurring class would be nearly absent and
+    κ would be dominated by (or undefined on) the majority class. The human still
+    annotates blind, so using the machine label to *select* the sample does not bias the
+    *agreement* measurement.
 
-    JUDGE_ERROR (and any non-CATEGORY label) is dropped — it is not a valid category
-    and would pollute κ.
+    JUDGE_ERROR (and any non-category label) is dropped — it is not a valid category and
+    would pollute κ.
 
-    Sampling is seeded for reproducibility. Within each category the records are
-    shuffled with a dedicated random.Random(seed) instance (so the global RNG is left
-    untouched) and the first `per_category` are taken. The result is sorted by
-    sample_id to give the annotator a stable, deterministic ordering.
+    Sampling is seeded for reproducibility. Within each category the records are shuffled
+    with a dedicated random.Random(seed) instance (so the global RNG is left untouched)
+    and the first `per_category` are taken. The result is sorted by sample_id to give the
+    annotator a stable, deterministic ordering.
     """
     rng = random.Random(seed)
-    by_category: dict[str, list[dict]] = {cat: [] for cat in CATEGORIES}
+    by_category: dict[str, list[dict]] = {cat: [] for cat in AWARENESS_CATEGORIES}
     for record in labeled:
-        cat = record.get("machine_label")
+        cat = record.get("machine_awareness")
         if cat in by_category:
             by_category[cat].append(record)
 
     selected: list[dict] = []
-    for cat in CATEGORIES:
+    for cat in AWARENESS_CATEGORIES:
         bucket = list(by_category[cat])
         rng.shuffle(bucket)
         selected.extend(bucket[:per_category])
@@ -233,9 +253,10 @@ def stratify_samples(
 # ---------------------------------------------------------------------------
 
 def _write_worksheet(selected: list[dict], output_path: str) -> None:
-    """Adds the blank human_label field and persists the worksheet to disk."""
+    """Adds the blank per-axis human-label fields and persists the worksheet to disk."""
     for record in selected:
-        record.setdefault("human_label", None)
+        record.setdefault("human_awareness", None)
+        record.setdefault("human_lever", None)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(selected, f, indent=2, ensure_ascii=False)
 
@@ -435,77 +456,106 @@ def interpret_kappa(k: float) -> str:
 # 6. κ FROM A SAVED SAMPLE SET (offline)
 # ---------------------------------------------------------------------------
 
+def _axis_pair(record: dict, axis: str) -> tuple:
+    """Returns (human_label, machine_label) for the given axis ("awareness" or
+    "lever") from a worksheet record, falling back to the legacy single-axis fields
+    (human_label / machine_label) so previously annotated worksheets still score."""
+    human = record.get(f"human_{axis}")
+    machine = record.get(f"machine_{axis}")
+    if human is None and machine is None and ("human_label" in record or "machine_label" in record):
+        idx = 0 if axis == "awareness" else 1
+        h = record.get("human_label")
+        m = record.get("machine_label")
+        human = legacy_vector_to_axes(h)[idx] if h is not None else None
+        machine = legacy_vector_to_axes(m)[idx] if m is not None else None
+    return human, machine
+
+
 def compute_kappa_from_sampleset(path: str = DEFAULT_SAMPLESET_PATH) -> dict:
     """
-    Loads a kappa_samples.json worksheet and computes κ over the rows the human has
-    annotated (i.e. `human_label` is set to one of CATEGORIES). Rows that are
-    unannotated, skipped, or carry a JUDGE_ERROR machine label are excluded by
-    cohen_kappa's category filter.
+    Loads a kappa_samples.json worksheet and computes Cohen's κ PER AXIS over the rows
+    the human has annotated. Rows that are unannotated, skipped, or carry a JUDGE_ERROR
+    machine label are excluded by cohen_kappa's category filter.
 
-    Returns the cohen_kappa result dict, augmented with:
-        "annotated": int   # rows with a usable human_label
-        "total":     int   # total rows in the sample set
+    Returns:
+        {
+          "awareness": <cohen_kappa result dict for Axis A>,
+          "lever":     <cohen_kappa result dict for Axis B>,
+          "annotated": int,   # rows with a usable human awareness label
+          "total":     int,   # total rows in the sample set
+        }
 
-    so the caller can show progress ("42 of 80 annotated") alongside the coefficient.
+    so the caller can show progress ("42 of 80 annotated") alongside both coefficients.
     """
     with open(path, "r", encoding="utf-8") as f:
         records = json.load(f)
 
-    cat_set = set(CATEGORIES)
-    human, machine = [], []
+    aware_set = set(AWARENESS_CATEGORIES)
+    human_aware, machine_aware = [], []
+    human_lever, machine_lever = [], []
     annotated = 0
     for record in records:
-        h = record.get("human_label")
-        if h in cat_set:
+        ha, ma = _axis_pair(record, "awareness")
+        hl, ml = _axis_pair(record, "lever")
+        if ha in aware_set:
             annotated += 1
-        human.append(h)
-        machine.append(record.get("machine_label"))
+        human_aware.append(ha)
+        machine_aware.append(ma)
+        human_lever.append(hl)
+        machine_lever.append(ml)
 
-    result = cohen_kappa(human, machine, CATEGORIES)
-    result["annotated"] = annotated
-    result["total"] = len(records)
-    return result
+    return {
+        "awareness": cohen_kappa(human_aware, machine_aware, AWARENESS_CATEGORIES),
+        "lever": cohen_kappa(human_lever, machine_lever, LEVER_CATEGORIES),
+        "annotated": annotated,
+        "total": len(records),
+    }
 
 
 # ---------------------------------------------------------------------------
 # Reporting helper
 # ---------------------------------------------------------------------------
 
-def _print_kappa_report(result: dict, source: str) -> None:
-    """Pretty-prints a κ result dict (confusion matrix + coefficient) to stdout."""
-    print("\n==================================================")
-    print("        LLM-AS-A-JUDGE KAPPA VALIDATION         ")
-    print("==================================================")
-    print(f"  Source            : {source}")
-    if "annotated" in result:
-        print(f"  Annotated samples : {result['annotated']} / {result['total']}")
-    print(f"  Scored pairs (n)  : {result['n']}")
-    print(f"  Observed agreement: {result['p_observed']:.3f}")
-    print(f"  Expected by chance: {result['p_expected']:.3f}")
-    print(f"  Cohen's Kappa     : {result['kappa']:.4f}  ->  {result['interpretation']}")
+def _print_axis_block(axis_name: str, result: dict, categories: list[str]) -> None:
+    """Pretty-prints one axis's κ coefficient + confusion matrix to stdout."""
+    print(f"\n  [{axis_name}]")
+    print(f"    Scored pairs (n)  : {result['n']}")
+    print(f"    Observed agreement: {result['p_observed']:.3f}")
+    print(f"    Expected by chance: {result['p_expected']:.3f}")
+    print(f"    Cohen's Kappa     : {result['kappa']:.4f}  ->  {result['interpretation']}")
     target = "PASS (kappa >= 0.80)" if result["kappa"] >= 0.80 else "BELOW TARGET (kappa < 0.80)"
-    print(f"  Target check      : {target}")
-    print("--------------------------------------------------")
-
+    print(f"    Target check      : {target}")
     if result["n"] == 0:
-        print("  No annotated pairs to score yet. Annotate samples first.\n")
+        print("    No annotated pairs to score yet.")
         return
 
     # Confusion matrix: rows = HUMAN, cols = MACHINE.
     confusion = result["confusion"]
-    short = {c: c[:6] for c in CATEGORIES}
+    short = {c: c[:6] for c in categories}
     col_w = 8
-    label_w = max(len(c) for c in CATEGORIES) + 2
+    label_w = max(len(c) for c in categories) + 2
     corner = "HUMAN\\MACH"
-    header = f"  {corner:<{label_w}}"
-    for c in CATEGORIES:
+    header = f"    {corner:<{label_w}}"
+    for c in categories:
         header += f"{short[c]:>{col_w}}"
     print(header)
-    for a in CATEGORIES:
-        row = f"  {a:<{label_w}}"
-        for b in CATEGORIES:
+    for a in categories:
+        row = f"    {a:<{label_w}}"
+        for b in categories:
             row += f"{confusion[a][b]:>{col_w}}"
         print(row)
+
+
+def _print_kappa_report(result: dict, source: str) -> None:
+    """Pretty-prints the per-axis κ result (both confusion matrices) to stdout."""
+    print("\n==================================================")
+    print("        LLM-AS-A-JUDGE KAPPA VALIDATION         ")
+    print("==================================================")
+    print(f"  Source            : {source}")
+    print(f"  Annotated samples : {result['annotated']} / {result['total']}")
+    print("--------------------------------------------------")
+    _print_axis_block("AXIS A — awareness", result["awareness"], AWARENESS_CATEGORIES)
+    _print_axis_block("AXIS B — manipulation_lever", result["lever"], LEVER_CATEGORIES)
     print()
 
 
