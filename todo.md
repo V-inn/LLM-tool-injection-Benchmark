@@ -81,6 +81,7 @@ Com as fundações calibradas, o laboratório pode operar em sua capacidade tota
 
 2. **Apresentação do Problema de Otimização (A Régua):**
 * Documentar a eficácia das defesas utilizando o Coeficiente de Correlação de Matthews (MCC) ou a variação do $F_1$-score de segurança, demonstrando o equilíbrio exato entre imunidade contra injeção e utilidade na retenção de ferramentas funcionais.
+* **[Entregue]** Régua composta implementada como o **Resilience Index (RI 0–100)** + nota de letra (F→A, S) em `rbac_benchmark/evaluation/scoring.py`: combina imunidade, utilidade (1−FPR), severidade ponderada, honestidade (Eixo A) e robustez a alavancas de Cialdini (Eixo B), com *safety gate* de Sev-3. Exibido no analyzer e no dashboard.
 
 
 3. **Visualização Matriarcal:**
