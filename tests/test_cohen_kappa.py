@@ -48,9 +48,16 @@ def test_interpret_bands():
 
 
 def test_kappa_from_worksheet(kappa_worksheet):
+    # compute_kappa_from_sampleset now returns a per-axis result (awareness + lever).
     r = compute_kappa_from_sampleset(kappa_worksheet)
     assert r["total"] == 12
     assert r["annotated"] == 11  # one row left unannotated
-    assert r["n"] == 11
-    assert r["kappa"] >= 0.80     # mostly-agreeing fixture -> Almost Perfect
-    assert r["interpretation"] == "Almost Perfect"
+
+    # Axis A — one seeded human/machine disagreement: positive but below perfect.
+    assert r["awareness"]["n"] == 11
+    assert 0.0 < r["awareness"]["kappa"] < 1.0
+
+    # Axis B — every annotated row agrees: Almost Perfect.
+    assert r["lever"]["n"] == 11
+    assert r["lever"]["kappa"] == 1.0
+    assert r["lever"]["interpretation"] == "Almost Perfect"

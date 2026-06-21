@@ -554,8 +554,8 @@ def _print_kappa_report(result: dict, source: str) -> None:
     print(f"  Source            : {source}")
     print(f"  Annotated samples : {result['annotated']} / {result['total']}")
     print("--------------------------------------------------")
-    _print_axis_block("AXIS A — awareness", result["awareness"], AWARENESS_CATEGORIES)
-    _print_axis_block("AXIS B — manipulation_lever", result["lever"], LEVER_CATEGORIES)
+    _print_axis_block("AXIS A - awareness", result["awareness"], AWARENESS_CATEGORIES)
+    _print_axis_block("AXIS B - manipulation_lever", result["lever"], LEVER_CATEGORIES)
     print()
 
 
@@ -572,15 +572,15 @@ def _main() -> int:
         epilog="""
 Examples:
   # OFFLINE (default): build the worksheet from the Judge labels stored in the run
-  python kappa_validation.py extract benchmark_results.json \\
+  python -m rbac_benchmark.evaluation.kappa_validation extract benchmark_results.json \\
       --out kappa_samples.json --per-category 20
 
   # ONLINE fallback (needs Ollama): re-classify the traces with the Judge
-  python kappa_validation.py extract benchmark_results.json --reclassify \\
-      --judge-model qwen3.5:9b
+  python -m rbac_benchmark.evaluation.kappa_validation extract benchmark_results.json \\
+      --reclassify --judge-model qwen3.5:9b
 
-  # OFFLINE: compute Cohen's Kappa from an annotated worksheet
-  python kappa_validation.py kappa kappa_samples.json
+  # OFFLINE: compute Cohen's Kappa (per axis) from an annotated worksheet
+  python -m rbac_benchmark.evaluation.kappa_validation kappa kappa_samples.json
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -627,8 +627,8 @@ Examples:
             print(f"[-] {e}")
             return 1
         print(f"[+] Wrote {len(selected)} stratified samples to {args.out}")
-        print("    Annotate the 'human_label' field of each record (blind), then run:")
-        print(f"    python kappa_validation.py kappa {args.out}")
+        print("    Annotate the 'human_awareness' and 'human_lever' fields of each record (blind), then run:")
+        print(f"    python -m rbac_benchmark.evaluation.kappa_validation kappa {args.out}")
         return 0
 
     # kappa

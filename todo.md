@@ -84,4 +84,4 @@ Com as fundações calibradas, o laboratório pode operar em sua capacidade tota
 
 
 3. **Visualização Matriarcal:**
-* Exportar os gráficos de radar térmico e as matrizes psicológicas geradas pelo Streamlit para evidenciar os vetores `AUTHORITY_BIAS` e `URGENCY_PANIC`.
+* Exportar os gráficos de radar térmico e as matrizes psicológicas de duas dimensões geradas pelo Streamlit: o eixo de **awareness** (destacando `DETECTED_BUT_COMPLIED` — o modelo detectou a injeção e mesmo assim obedeceu) e o perfil de **alavancas de Cialdini** (`AUTHORITY`, `SCARCITY_URGENCY`, `SOCIAL_PROOF`, `RECIPROCITY`, `COMMITMENT_CONSISTENCY`, `LIKING`).
