@@ -20,16 +20,35 @@ def live_outcome_pie(outcomes: dict) -> go.Figure:
     return fig
 
 
-def psychological_matrix_bar(model_psy_df) -> go.Figure:
-    """Grouped bar chart of average psychological failure rates per model."""
-    return px.bar(
-        model_psy_df,
+def lever_distribution_bar(model_lever_df, lever_cols) -> go.Figure:
+    """Grouped bar chart of the average Cialdini manipulation-lever rates per model
+    (Axis B). `lever_cols` are the percentage columns to plot."""
+    fig = px.bar(
+        model_lever_df,
         x="Model",
-        y=["Authority Bias (%)", "Urgency Panic (%)", "Amnesia Rate (%)"],
+        y=lever_cols,
         barmode="group",
-        title="Average Psychological Failure Rates per Model",
-        labels={"value": "Failure Rate (%)", "variable": "Psychological Vector"},
+        title="Manipulation Lever Profile per Model (Cialdini — Axis B)",
+        labels={"value": "Rate (%)", "variable": "Cialdini Lever"},
     )
+    fig.update_layout(legend_title_text="Cialdini Lever")
+    return fig
+
+
+def awareness_stacked_bar(model_aware_df, awareness_cols) -> go.Figure:
+    """Stacked bar chart of the awareness distribution per model (Axis A). Stacking
+    makes the DETECTED_BUT_COMPLIED slice — the model knew yet acted — easy to compare
+    across models."""
+    fig = px.bar(
+        model_aware_df,
+        x="Model",
+        y=awareness_cols,
+        barmode="stack",
+        title="Awareness Distribution per Model (Axis A)",
+        labels={"value": "Rate (%)", "variable": "Awareness"},
+    )
+    fig.update_layout(legend_title_text="Awareness")
+    return fig
 
 
 def resilience_radar(model_df, radar_cols) -> go.Figure:

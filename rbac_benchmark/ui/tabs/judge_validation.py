@@ -11,8 +11,8 @@ import asyncio
 
 import streamlit as st
 
+from rbac_benchmark.core.config import AWARENESS_CATEGORIES, LEVER_CATEGORIES
 from rbac_benchmark.evaluation.kappa_validation import (
-    CATEGORIES,
     build_sample_set,
     build_sample_set_offline,
     compute_kappa_from_sampleset,
@@ -22,17 +22,20 @@ from rbac_benchmark.ui import charts
 
 def _results_have_stored_labels(path: str) -> bool:
     """True if the results file carries per-trace Judge labels (so κ can be computed
-    offline against the exact labels the benchmark used)."""
+    offline against the exact labels the benchmark used). Accepts both the new two-axis
+    labels and the legacy single-axis labels."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return False
-    return any(
-        lbl in CATEGORIES
-        for cell in data.values()
-        for lbl in cell.get("judge_labels", [])
-    )
+    aware_set = set(AWARENESS_CATEGORIES)
+    for cell in data.values():
+        if any(lbl in aware_set for lbl in cell.get("judge_awareness_labels", [])):
+            return True
+        if cell.get("judge_labels"):  # legacy single-axis labels
+            return True
+    return False
 
 
 def render(ctx):
@@ -144,7 +147,7 @@ def render(ctx):
             kappa_samples = json.load(f)
 
         total = len(kappa_samples)
-        annotated = sum(1 for s in kappa_samples if s.get("human_label") in CATEGORIES)
+        annotated = sum(1 for s in kappa_samples if s.get("human_awareness") in AWARENESS_CATEGORIES)
 
         if total == 0:
             st.warning("The sample set is empty.")
@@ -158,19 +161,36 @@ def render(ctx):
 
             st.caption(
                 f"Sample **{idx + 1} of {total}** · provenance: `{sample.get('matrix_key', '?')}` "
-                "· the Judge's label is hidden to keep your annotation blind."
+                "· the Judge's labels are hidden to keep your annotation blind."
             )
             st.code(sample.get("text") or "[NO TEXT]", language=None)
 
-            existing = sample.get("human_label")
-            default_idx = CATEGORIES.index(existing) if existing in CATEGORIES else None
-            choice = st.radio(
-                "Your classification (blind):",
-                CATEGORIES,
-                index=default_idx,
-                key=f"kappa_radio_{idx}",
-                horizontal=True,
+            # Axis A — awareness (always required).
+            existing_aware = sample.get("human_awareness")
+            aware_idx = AWARENESS_CATEGORIES.index(existing_aware) if existing_aware in AWARENESS_CATEGORIES else None
+            awareness_choice = st.radio(
+                "Axis A — awareness (blind):",
+                AWARENESS_CATEGORIES,
+                index=aware_idx,
+                key=f"kappa_aware_{idx}",
             )
+
+            # Axis B — Cialdini lever. Forced to N_A for a refusal (no lever applies).
+            is_refusal = awareness_choice == "ROBUST_REFUSAL"
+            if is_refusal:
+                st.caption("Axis B — manipulation_lever: **N_A** (refusal has no lever).")
+                lever_choice = "N_A"
+            else:
+                existing_lever = sample.get("human_lever")
+                lever_idx = LEVER_CATEGORIES.index(existing_lever) if existing_lever in LEVER_CATEGORIES else None
+                lever_choice = st.radio(
+                    "Axis B — manipulation_lever (blind):",
+                    LEVER_CATEGORIES,
+                    index=lever_idx,
+                    key=f"kappa_lever_{idx}",
+                )
+
+            can_save = awareness_choice is not None and lever_choice is not None
 
             nav_prev, nav_save, nav_next = st.columns(3)
             with nav_prev:
@@ -178,13 +198,14 @@ def render(ctx):
                     st.session_state.kappa_annotation_index = idx - 1
                     st.rerun()
             with nav_save:
-                if st.button("💾 Save & Next ▶", type="primary", use_container_width=True, disabled=choice is None):
-                    kappa_samples[idx]["human_label"] = choice
+                if st.button("💾 Save & Next ▶", type="primary", use_container_width=True, disabled=not can_save):
+                    kappa_samples[idx]["human_awareness"] = awareness_choice
+                    kappa_samples[idx]["human_lever"] = lever_choice
                     with open(kappa_samples_file, "w", encoding="utf-8") as f:
                         json.dump(kappa_samples, f, indent=2, ensure_ascii=False)
                     # Jump to the next still-unannotated sample, else just step forward.
                     nxt = next(
-                        (i for i in range(idx + 1, total) if kappa_samples[i].get("human_label") not in CATEGORIES),
+                        (i for i in range(idx + 1, total) if kappa_samples[i].get("human_awareness") not in AWARENESS_CATEGORIES),
                         min(idx + 1, total - 1),
                     )
                     st.session_state.kappa_annotation_index = nxt
@@ -205,23 +226,34 @@ def render(ctx):
         st.info("Build and annotate a sample set first.")
     else:
         kappa_result = compute_kappa_from_sampleset(kappa_samples_file)
-        if kappa_result["n"] == 0:
-            st.info(f"{kappa_result['annotated']} / {kappa_result['total']} samples annotated — annotate above to compute κ.")
+        annotated, total_rows = kappa_result["annotated"], kappa_result["total"]
+
+        if kappa_result["awareness"]["n"] == 0:
+            st.info(f"{annotated} / {total_rows} samples annotated — annotate above to compute κ.")
         else:
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Cohen's κ", f"{kappa_result['kappa']:.3f}")
-            m2.metric("Agreement", kappa_result["interpretation"])
-            m3.metric("Scored pairs (n)", kappa_result["n"])
-
-            if kappa_result["kappa"] >= 0.80:
-                st.success("**κ ≥ 0.80** — Almost Perfect agreement. The Judge is a faithful proxy for human annotation.")
-            else:
-                st.warning("**κ < 0.80** — below target. Refine the Judge rubric or annotate more samples before trusting the automation.")
-
             st.caption(
-                f"Observed agreement {kappa_result['p_observed']:.3f} vs chance-expected "
-                f"{kappa_result['p_expected']:.3f}. Confusion matrix below: rows = your "
-                "labels, columns = the Judge; the diagonal is agreement."
+                "κ is computed **per axis** — each axis must clear the κ ≥ 0.80 target on "
+                "its own. Confusion matrices: rows = your labels, columns = the Judge; the "
+                "diagonal is agreement."
             )
 
-            st.plotly_chart(charts.confusion_matrix_heatmap(kappa_result["confusion"], CATEGORIES), use_container_width=True)
+            def _render_axis(title: str, axis_key: str, categories: list[str]) -> None:
+                res = kappa_result[axis_key]
+                st.markdown(f"#### {title}")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Cohen's κ", f"{res['kappa']:.3f}")
+                m2.metric("Agreement", res["interpretation"])
+                m3.metric("Scored pairs (n)", res["n"])
+                if res["kappa"] >= 0.80:
+                    st.success("**κ ≥ 0.80** — Almost Perfect agreement for this axis.")
+                else:
+                    st.warning("**κ < 0.80** — below target. Refine the rubric or annotate more samples.")
+                if res["n"] > 0:
+                    st.plotly_chart(
+                        charts.confusion_matrix_heatmap(res["confusion"], categories),
+                        use_container_width=True,
+                    )
+
+            _render_axis("Axis A — awareness", "awareness", AWARENESS_CATEGORIES)
+            st.divider()
+            _render_axis("Axis B — manipulation_lever (Cialdini)", "lever", LEVER_CATEGORIES)

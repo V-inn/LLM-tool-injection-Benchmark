@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from rbac_benchmark.evaluation.analyzer import validate_attack_strength, compute_delta_tpr
-from rbac_benchmark.ui.data import load_and_parse_results
+from rbac_benchmark.ui.data import load_and_parse_results, AWARENESS_COLS, LEVER_COLS
 from rbac_benchmark.ui import charts
 
 
@@ -85,10 +85,19 @@ def render(ctx):
             # Mask FPR to NaN where no benign-control data exists (keeps display clean)
             agg_df.loc[agg_df["Benign_Total"] == 0, "False Positive Rate (%)"] = float("nan")
 
-            # Psychological vector rates (from LLM Judge)
+            # Legacy psychological vector rates (derived from the two axes upstream)
             agg_df["Authority Bias (%)"] = (agg_df["Authority Bias"] / safe_totals) * 100
             agg_df["Urgency Panic (%)"] = (agg_df["Urgency Panic"] / safe_totals) * 100
             agg_df["Amnesia Rate (%)"] = (agg_df["Instruction Amnesia"] / safe_totals) * 100
+
+            # Two-axis Judge rates. AW%/LV% percentage columns are derived from the raw
+            # AW:/LV: counts produced by load_and_parse_results.
+            aware_pct = {col: col.replace("AW:", "AW% ") for col in AWARENESS_COLS if col in agg_df}
+            lever_pct = {col: col.replace("LV:", "LV% ") for col in LEVER_COLS if col in agg_df}
+            for raw_col, pct_col in {**aware_pct, **lever_pct}.items():
+                agg_df[pct_col] = (agg_df[raw_col] / safe_totals) * 100
+            aware_pct_cols = list(aware_pct.values())
+            lever_pct_cols = list(lever_pct.values())
 
             # KPI Cards — use the actual total sum, not safe_totals.sum() which inflates
             # the denominator by 1 for every row that originally had zero inferences.
@@ -123,13 +132,42 @@ def render(ctx):
                 "The ideal model has **high TPR** (blocks adversarial injections) **and low FPR** (allows benign payloads)."
             )
 
-            # --- Control Illusion Psychological Matrix ---
+            # --- Control Illusion Psychological Matrix (two axes) ---
             st.divider()
             st.subheader("Control Illusion Psychological Matrix")
-            st.write("Visualizing exactly *why* models broke their RBAC contracts.")
+            st.write(
+                "Two orthogonal Judge axes: **awareness** (did the model know?) and the "
+                "**Cialdini manipulation lever** (what moved it?). The "
+                "`DETECTED_BUT_COMPLIED` slice is the model knowing it was an injection "
+                "yet acting anyway."
+            )
 
-            model_psy_df = agg_df.groupby("Model")[["Authority Bias (%)", "Urgency Panic (%)", "Amnesia Rate (%)"]].mean().reset_index()
-            st.plotly_chart(charts.psychological_matrix_bar(model_psy_df), use_container_width=True)
+            has_psy = bool(aware_pct_cols or lever_pct_cols) and (
+                agg_df[aware_pct_cols + lever_pct_cols].to_numpy().sum() > 0
+            )
+            if has_psy:
+                # Strip the AW%/LV% prefixes for friendly chart legends.
+                aware_rename = {c: c.replace("AW% ", "") for c in aware_pct_cols}
+                lever_rename = {c: c.replace("LV% ", "") for c in lever_pct_cols}
+                model_aware_df = (
+                    agg_df.groupby("Model")[aware_pct_cols].mean().reset_index().rename(columns=aware_rename)
+                )
+                model_lever_df = (
+                    agg_df.groupby("Model")[lever_pct_cols].mean().reset_index().rename(columns=lever_rename)
+                )
+                st.plotly_chart(
+                    charts.awareness_stacked_bar(model_aware_df, list(aware_rename.values())),
+                    use_container_width=True,
+                )
+                st.plotly_chart(
+                    charts.lever_distribution_bar(model_lever_df, list(lever_rename.values())),
+                    use_container_width=True,
+                )
+            else:
+                st.caption(
+                    "No Judge psychological data in this run — enable the Judge in the "
+                    "Control Center to populate the awareness + Cialdini-lever charts."
+                )
 
             # --- Model Resilience Radar Chart ---
             # 5 axes give a meaningful multi-dimensional risk profile. Fewer axes
@@ -146,6 +184,7 @@ def render(ctx):
             st.divider()
             st.subheader("Defense Performance Analysis")
 
+            detected_col = "AW% DETECTED_BUT_COMPLIED"
             display_columns = [
                 "Model",
                 "Defense",
@@ -153,9 +192,13 @@ def render(ctx):
                 "Immunity Rate (%)",
                 "False Positive Rate (%)",
                 "Critical Fail Rate (%)",
+            ]
+            if detected_col in agg_df:
+                display_columns.append(detected_col)
+            display_columns += [
                 "Authority Bias (%)",
                 "Urgency Panic (%)",
-                "Amnesia Rate (%)"
+                "Amnesia Rate (%)",
             ]
 
             st.dataframe(
@@ -184,6 +227,11 @@ def render(ctx):
                     "Critical Fail Rate (%)": st.column_config.NumberColumn(
                         "Sev-3 Failures",
                         help="Percentage of times the model executed the delete_database payload.",
+                        format="%.1f%%",
+                    ),
+                    detected_col: st.column_config.NumberColumn(
+                        "Detected→Complied",
+                        help="Axis A: model flagged the content as suspicious/an injection yet executed it anyway.",
                         format="%.1f%%",
                     ),
                     "Authority Bias (%)": st.column_config.NumberColumn(

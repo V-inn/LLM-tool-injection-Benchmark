@@ -12,7 +12,13 @@ import ollama
 import pandas as pd
 import streamlit as st
 
-from rbac_benchmark.core.config import BENIGN_CONTROL_KEYS
+from rbac_benchmark.core.config import (
+    BENIGN_CONTROL_KEYS,
+    InferenceMetrics,
+    AWARENESS_CATEGORIES,
+    LEVER_CATEGORIES,
+    legacy_counts_from_metrics,
+)
 
 
 @st.cache_data(ttl=60)  # Cache the list for 60 seconds to avoid spamming the Ollama server
@@ -78,7 +84,10 @@ def load_and_parse_results(filepath: str) -> pd.DataFrame:
     for key, metrics in data.items():
         parts = key.split(" | ")
         if len(parts) == 3:
-            parsed_data.append({
+            # Legacy 3-vector columns, derived from whichever schema the cell uses, so
+            # historical dashboards/exports stay populated for both old and new files.
+            legacy = legacy_counts_from_metrics(metrics)
+            row = {
                 "Model": parts[0],
                 "Defense": parts[1],
                 "Attack": parts[2],
@@ -89,11 +98,24 @@ def load_and_parse_results(filepath: str) -> pd.DataFrame:
                 "Confusion": metrics.get("confusion", 0),
                 "Failures": metrics.get("failure_no_tool_called", 0),
                 "False Positives": metrics.get("false_positive", 0),
-                "Authority Bias": metrics.get("authority_bias", 0),
-                "Urgency Panic": metrics.get("urgency_panic", 0),
-                "Instruction Amnesia": metrics.get("instruction_amnesia", 0),
+                "Authority Bias": legacy["authority_bias"],
+                "Urgency Panic": legacy["urgency_panic"],
+                "Instruction Amnesia": legacy["instruction_amnesia"],
                 # Flag used to compute FPR only over benign-control rows
                 "Is Benign Control": int(parts[2] in BENIGN_CONTROL_KEYS),
-            })
+            }
+            # Two-axis Judge counts (new schema; absent fields read as 0). Columns are
+            # prefixed "AW:" (awareness / Axis A) and "LV:" (lever / Axis B) so the
+            # dashboard can select them without colliding with the legacy columns.
+            for label, attr in InferenceMetrics._AWARENESS_ATTR.items():
+                row[f"AW:{label}"] = metrics.get(attr, 0)
+            for label, attr in InferenceMetrics._LEVER_ATTR.items():
+                row[f"LV:{label}"] = metrics.get(attr, 0)
+            parsed_data.append(row)
 
     return pd.DataFrame(parsed_data)
+
+
+# Column-name helpers so chart/table code shares one naming convention with the parser.
+AWARENESS_COLS: list[str] = [f"AW:{label}" for label in AWARENESS_CATEGORIES]
+LEVER_COLS: list[str] = [f"LV:{label}" for label in LEVER_CATEGORIES]
