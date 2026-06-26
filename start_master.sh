@@ -25,6 +25,6 @@ ollama serve &
 sleep 3 
 
 echo "[*] Starting Control Center Dashboard..."
-# Acessa o diretório e dispara a interface gráfica
-cd master
-streamlit run gui_app.py
+# Launch the Streamlit dashboard. The project is an installed package
+# (pip install -e .), so the console entry point boots the app.
+rbac-dashboard
