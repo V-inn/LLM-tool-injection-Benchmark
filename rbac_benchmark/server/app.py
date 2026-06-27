@@ -80,8 +80,8 @@ _PAGES = {
 }
 
 
-def _ctx(request: Request, page: str) -> dict:
-    return {"request": request, "active_page": page, "pages": _PAGES}
+def _ctx(page: str) -> dict:
+    return {"active_page": page, "pages": _PAGES}
 
 
 @app.get("/")
@@ -91,24 +91,24 @@ def root():
 
 @app.get("/control")
 def page_control(request: Request):
-    return templates.TemplateResponse("control.html", _ctx(request, "control"))
+    return templates.TemplateResponse(request, "control.html", _ctx("control"))
 
 
 @app.get("/dashboard")
 def page_dashboard(request: Request):
-    return templates.TemplateResponse("dashboard.html", _ctx(request, "dashboard"))
+    return templates.TemplateResponse(request, "dashboard.html", _ctx("dashboard"))
 
 
 @app.get("/payload")
 def page_payload(request: Request):
-    return templates.TemplateResponse("payload.html", _ctx(request, "payload"))
+    return templates.TemplateResponse(request, "payload.html", _ctx("payload"))
 
 
 @app.get("/prompts")
 def page_prompts(request: Request):
-    return templates.TemplateResponse("prompts.html", _ctx(request, "prompts"))
+    return templates.TemplateResponse(request, "prompts.html", _ctx("prompts"))
 
 
 @app.get("/kappa")
 def page_kappa(request: Request):
-    return templates.TemplateResponse("kappa.html", _ctx(request, "kappa"))
+    return templates.TemplateResponse(request, "kappa.html", _ctx("kappa"))
