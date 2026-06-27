@@ -16,7 +16,29 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from rbac_benchmark.ui.data import get_available_local_models, ollama_is_online
+def get_available_local_models():
+    try:
+        import ollama
+        models_dict = ollama.list()
+        raw = models_dict.get("models", []) if isinstance(models_dict, dict) else getattr(models_dict, "models", [])
+        out = []
+        for m in raw:
+            try:
+                out.append(m["model"])
+            except (TypeError, KeyError):
+                out.append(getattr(m, "model", str(m)))
+        return out
+    except Exception:
+        return []
+
+
+def ollama_is_online() -> bool:
+    try:
+        import ollama
+        ollama.list()
+        return True
+    except Exception:
+        return False
 
 _HERE = Path(__file__).parent
 
