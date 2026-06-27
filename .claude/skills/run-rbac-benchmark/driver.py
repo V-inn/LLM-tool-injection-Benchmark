@@ -15,10 +15,10 @@ surfaces a future agent (or PR) actually touches:
                 OLLAMA_READY). Proves the worker runs without Ollama installed.
 
   seed          Writes synthetic data/benchmark_results.json + data/kappa_samples.json
-                so the Streamlit dashboard + Judge Validation tab have data to render.
+                so the FastAPI dashboard + Judge κ tab have data to render.
 
-  shot          Seeds data, launches the Streamlit GUI headless, waits for it
-                to hydrate, drives Firefox (Selenium) to screenshot a tab, then
+  shot          Seeds data, launches the FastAPI/uvicorn server headless, waits for it
+                to become ready, drives Firefox (Selenium) to screenshot a tab, then
                 tears everything down. The only way to screenshot the dashboard
                 on a headless box.
 
@@ -48,7 +48,7 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SKILL_DIR.parents[2]            # .../skills/run-.. -> skills -> .claude -> repo
 DATA_DIR = REPO_ROOT / "data"
-APP_PATH = REPO_ROOT / "rbac_benchmark" / "ui" / "app.py"
+SERVER_MODULE = "rbac_benchmark.server.app:app"
 SHOT_DIR = SKILL_DIR / "screenshots"
 
 # Firefox binary — override with FIREFOX_BIN if installed elsewhere.
@@ -235,21 +235,20 @@ def cmd_shot(args) -> int:
     SHOT_DIR.mkdir(parents=True, exist_ok=True)
     out = Path(args.out) if args.out else (SHOT_DIR / "dashboard.png")
 
-    # Launch Streamlit headless as a child process, pointing at the package app.
+    # Launch FastAPI/uvicorn headless as a child process.
     env = dict(os.environ)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", str(APP_PATH),
-         "--server.headless", "true", "--server.port", str(args.port),
-         "--browser.gatherUsageStats", "false"],
+        [sys.executable, "-m", "uvicorn", SERVER_MODULE,
+         "--host", "127.0.0.1", "--port", str(args.port)],
         cwd=str(REPO_ROOT), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     driver = None
     try:
         if not _wait_http(args.port):
-            print("[-] Streamlit did not become ready", file=sys.stderr)
+            print("[-] uvicorn did not become ready", file=sys.stderr)
             return 1
-        print(f"[*] Streamlit ready on :{args.port}")
+        print(f"[*] FastAPI server ready on :{args.port}")
 
         opts = Options()
         opts.add_argument("--headless")
@@ -259,7 +258,7 @@ def cmd_shot(args) -> int:
         driver.get(f"http://localhost:{args.port}/")
         # Wait for the SPA to hydrate (title text appears only after JS runs).
         WebDriverWait(driver, 40).until(EC.presence_of_element_located(
-            (By.XPATH, "//*[contains(text(),'LLM Red Team Benchmark')]")))
+            (By.XPATH, "//*[contains(text(),'RBAC Resilience Benchmark') or contains(text(),'LLM Red Team Benchmark')]")))
 
         if args.tab:
             el = WebDriverWait(driver, 20).until(EC.element_to_be_clickable(
