@@ -50,30 +50,51 @@ def list_injections():
     raw = _load_json(_INJECTIONS_FILE)
     if raw is None:
         return {"injections": [], "generated_at": None}
-    items = raw if isinstance(raw, list) else raw.get("injections", [])
-    generated_at = raw.get("generated_at") if isinstance(raw, dict) else None
+    if isinstance(raw, dict) and "injections" not in raw:
+        # generator writes plain {key: payload_text} dict
+        items = [{"key": k, "text": v, "prompt": v} for k, v in raw.items()]
+        generated_at = None
+    elif isinstance(raw, dict):
+        items = raw.get("injections", [])
+        generated_at = raw.get("generated_at")
+    else:
+        items = raw
+        generated_at = None
     return {"injections": items, "generated_at": generated_at}
 
 
 # ── POST /api/payloads/generate-injections ────────────────────────────────────
 @router.post("/generate-injections")
 async def generate_injections(body: dict):
-    levers     = body.get("levers", [])
-    severities = body.get("severities", [1, 2, 3])
+    model      = body.get("model", "gemini-2.5-flash")
+    levers     = body.get("levers", []) or None
+    severities = body.get("severities", []) or None
     count      = int(body.get("count", 5))
-    context    = body.get("context", "")
+    context    = body.get("context", "").strip() or None
     token      = body.get("gemini_api_key", "").strip() or None
 
     try:
         from rbac_benchmark.generation.injection_generator import generate_injections as _gen
-        import datetime
-        with _gemini_key(token):
-            injections = _gen(levers=levers, severities=severities, count=count, context=context)
-        output = {"injections": injections, "generated_at": datetime.datetime.now().isoformat()}
-        Path(_INJECTIONS_FILE).write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
-        return output
     except ImportError:
         raise HTTPException(501, "injection_generator not available")
+
+    import datetime
+    try:
+        with _gemini_key(token):
+            await _gen(
+                attacker_model=model,
+                num_payloads=count,
+                output_file=_INJECTIONS_FILE,
+                levers=levers,
+                severities=severities,
+                context=context,
+            )
+        raw = _load_json(_INJECTIONS_FILE)
+        if isinstance(raw, dict) and "injections" not in raw:
+            injections = [{"key": k, "text": v, "prompt": v} for k, v in raw.items()]
+        else:
+            injections = (raw or {}).get("injections", raw) if isinstance(raw, dict) else (raw or [])
+        return {"injections": injections, "generated_at": datetime.datetime.now().isoformat()}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -81,24 +102,30 @@ async def generate_injections(body: dict):
 # ── POST /api/payloads/generate-defenses ─────────────────────────────────────
 @router.post("/generate-defenses")
 async def generate_defenses(body: dict):
-    strategies = body.get("strategies", [])
-    levers     = body.get("levers", [])
+    model      = body.get("model", "gemini-2.5-flash")
+    strategies = body.get("strategies", []) or None
+    levers     = body.get("levers", []) or None
     count      = int(body.get("count", 3))
     token      = body.get("gemini_api_key", "").strip() or None
+    _DEFENSES_FILE = data_path("generated_defenses.json")
 
     try:
         from rbac_benchmark.generation.defense_generator import generate_defenses as _gen
-        with _gemini_key(token):
-            defenses = _gen(strategies=strategies, levers=levers, count=count)
-        # Merge into custom_prompts.json
-        existing = _load_json(_PROMPTS_FILE) or {}
-        for d in defenses:
-            key = d.get("key") or d.get("name", "generated")
-            existing[key] = {"name": d.get("name", key), "system_prompt": d.get("text", ""), "levers": levers}
-        Path(_PROMPTS_FILE).write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"defenses": defenses, "count": len(defenses)}
     except ImportError:
         raise HTTPException(501, "defense_generator not available")
+
+    try:
+        with _gemini_key(token):
+            await _gen(model=model, output_file=_DEFENSES_FILE, strategies=strategies, levers=levers, count=count)
+        raw = _load_json(_DEFENSES_FILE)
+        if not isinstance(raw, dict):
+            raise HTTPException(500, "defense_generator returned unexpected output")
+        defenses = [{"key": k, "name": k, "text": v, "system_prompt": v} for k, v in raw.items()]
+        existing = _load_json(_PROMPTS_FILE) or {}
+        for d in defenses:
+            existing[d["key"]] = {"name": d["name"], "system_prompt": d["text"], "levers": levers or []}
+        Path(_PROMPTS_FILE).write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+        return {"defenses": defenses, "count": len(defenses)}
     except Exception as e:
         raise HTTPException(500, str(e))
 

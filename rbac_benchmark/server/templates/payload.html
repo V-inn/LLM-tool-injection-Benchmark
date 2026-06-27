@@ -27,6 +27,16 @@
     <div class="card-sub">generate Cialdini-framed tool-call injection attempts</div>
 
     <div class="form-group">
+      <label class="form-label">Attacker model</label>
+      <select id="inj-model">
+        <option value="gemini-3.5-flash" selected>gemini-3.5-flash</option>
+        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+      </select>
+    </div>
+
+    <div class="form-group">
       <label class="form-label">Cialdini levers</label>
       <div class="multi-check" id="lever-select">
         <label><input type="checkbox" name="lever" value="AUTHORITY" checked><span>AUTHORITY</span></label>
@@ -65,6 +75,16 @@
   <div class="card card-blue">
     <div class="card-title">Blue Team — Defensive Prompts</div>
     <div class="card-sub">generate system-prompt defense strategies</div>
+
+    <div class="form-group">
+      <label class="form-label">Generator model</label>
+      <select id="def-model">
+        <option value="gemini-3.5-flash" selected>gemini-3.5-flash</option>
+        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+      </select>
+    </div>
 
     <div class="form-group">
       <label class="form-label">Strategy</label>
@@ -151,22 +171,22 @@ function renderInjections(items) {
       '<div class="alert alert-info">No injections generated yet.</div>';
     return;
   }
-  const LEVER_COLOR = {
-    AUTHORITY:'#2F6FDB', SCARCITY_URGENCY:'#7C5CD6', SOCIAL_PROOF:'#2F9E6B',
-    RECIPROCITY:'#D39A2F', COMMITMENT_CONSISTENCY:'#C56B2C', LIKING:'#1E8A5B', NONE:'#9A9A93',
-  };
+  // items are {key, text} — key encodes strategy name (e.g. I_GEN_SEV3_URGENCY)
   const SEV_COLOR = {'1':'#D39A2F','2':'#C56B2C','3':'#C0392B'};
   document.getElementById('injections-list').innerHTML = items.map((inj, i) => {
-    const lc = LEVER_COLOR[inj.lever] || '#9A9A93';
-    const sc = SEV_COLOR[String(inj.severity)] || '#9A9A93';
+    const key = inj.key || '';
+    const sevMatch = key.match(/SEV(\d)/);
+    const sev = sevMatch ? sevMatch[1] : null;
+    const sc = sev ? (SEV_COLOR[sev] || '#9A9A93') : '#9A9A93';
+    const sevLabel = sev ? `SEV-${sev}` : 'GEN';
     return `
 <div style="background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:13px 14px;margin-bottom:8px">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-    <span class="chip" style="color:#fff;background:${lc}">${inj.lever || '?'}</span>
-    <span class="chip" style="color:${sc};background:${sc}22">SEV-${inj.severity || '?'}</span>
-    <span style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);margin-left:auto">val ${String(i+1).padStart(2,'0')}</span>
+    <span class="chip" style="color:${sc};background:${sc}22">${sevLabel}</span>
+    <span style="font-family:var(--font-mono);font-size:10px;font-weight:600;color:#3A3A37">${escHtml(key)}</span>
+    <span style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);margin-left:auto">${String(i+1).padStart(2,'0')}</span>
   </div>
-  <div style="font-family:var(--font-mono);font-size:11px;line-height:1.65;color:#3A3A37;white-space:pre-wrap;max-height:80px;overflow:hidden">${escHtml(inj.prompt || inj.text || '')}</div>
+  <div style="font-family:var(--font-mono);font-size:11px;line-height:1.65;color:#3A3A37;white-space:pre-wrap">${escHtml(inj.text || inj.prompt || '')}</div>
 </div>`;
   }).join('');
 }
@@ -211,31 +231,38 @@ function toggleTokenVis(btn) {
   btn.textContent = show ? 'Hide' : 'Show';
 }
 
+function checkedValues(name) {
+  return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(el => el.value);
+}
+
 async function generateInjections() {
-  const levers   = [...document.querySelectorAll('input[name="lever"]:checked')].map(e => e.value);
-  const severities = [...document.querySelectorAll('input[name="severity"]:checked')].map(e => parseInt(e.value));
-  const count    = parseInt(document.getElementById('inj-count').value);
-  const context  = document.getElementById('inj-context').value;
-  if (!levers.length) { alert('Select at least one lever.'); return; }
-  showGenStatus('info', 'Generating injections…');
+  const model      = document.getElementById('inj-model').value;
+  const count      = parseInt(document.getElementById('inj-count').value);
+  const levers     = checkedValues('lever');
+  const severities = checkedValues('severity').map(Number);
+  const context    = document.getElementById('inj-context').value.trim();
+  showGenStatus('info', `Generating ${count} injections with ${model}… (may take ~30s)`);
   try {
-    const body = { levers, severities, count, context };
+    const body = { model, count, levers, severities };
+    if (context) body.context = context;
     const tok = geminiToken();
     if (tok) body.gemini_api_key = tok;
     const d = await api('/api/payloads/generate-injections', { method: 'POST', body });
     renderInjections(d.injections || []);
-    showGenStatus('success', `Generated ${d.injections?.length || 0} injections.`);
+    const n = d.injections?.length || 0;
+    document.getElementById('inj-sub').textContent = `${n} injections · ${d.generated_at || '—'}`;
+    showGenStatus('success', `Generated ${n} injections.`);
   } catch(e) { showGenStatus('error', e.message); }
 }
 
 async function generateDefenses() {
-  const strategies = [...document.querySelectorAll('input[name="strategy"]:checked')].map(e => e.value);
-  const levers     = [...document.querySelectorAll('input[name="lever"]:checked')].map(e => e.value);
-  const count      = parseInt(document.getElementById('def-count').value);
-  if (!strategies.length) { alert('Select at least one strategy.'); return; }
-  showGenStatus('info', 'Generating defenses…');
+  const model      = document.getElementById('def-model').value;
+  const strategies = checkedValues('strategy');
+  const levers     = checkedValues('lever');
+  const count      = parseInt(document.getElementById('def-count').value) || 3;
+  showGenStatus('info', `Generating defenses with ${model}… (may take ~30s)`);
   try {
-    const body = { strategies, levers, count };
+    const body = { model, strategies, levers, count };
     const tok = geminiToken();
     if (tok) body.gemini_api_key = tok;
     const d = await api('/api/payloads/generate-defenses', { method: 'POST', body });

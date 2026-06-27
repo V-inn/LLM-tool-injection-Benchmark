@@ -45,3 +45,15 @@ data/kappa_samples.json
 .DS_Store
 *.swp
 *.swo
+
+# Tool outputs
+graphify-out/
+
+# Local dev notes
+literature_review.md
+
+# Test cache
+.pytest_cache/
+
+# Streamlit config (legacy — migrated to FastAPI)
+.streamlit/

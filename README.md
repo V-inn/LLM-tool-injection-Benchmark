@@ -48,29 +48,30 @@ The code is an installable Python package, `rbac_benchmark`, organised by concer
 
 ```
 rbac_benchmark/
-  core/         config.py, prompts.py, tools.py        # domain model + defense/attack matrix
-  llm/          clients.py, json_utils.py              # shared Gemini/Ollama plumbing
+  core/         config.py, prompts.py, tools.py              # domain model + defense/attack matrix
+  llm/          clients.py, json_utils.py                    # shared Gemini/Ollama plumbing
   evaluation/   analyzer.py, llm_judge.py, kappa_validation.py
   generation/   injection_generator.py, defense_generator.py
-  orchestration/ master_node.py                        # the distributed coordinator
-  worker/       node.py, cats/                         # UDP-discoverable worker daemon (+ feline supervisor)
-  ui/           app.py + data.py / charts.py / state.py + tabs/   # Streamlit dashboard
+  orchestration/ master_node.py                              # the distributed coordinator
+  worker/       node.py, cats/                               # UDP-discoverable worker daemon (+ feline supervisor)
+  server/       app.py, routes/, static/, templates/         # FastAPI web UI (Jinja2 + vanilla JS)
 data/           generated_*.json, *_results.json, kappa_samples.json   # runtime artifacts
 tests/          pytest suite for the metric / extraction / κ math
 ```
 
-*   **Master Node (`rbac_benchmark/orchestration/master_node.py` + `rbac_benchmark/ui/app.py`):** Orchestrates execution, dispatches generation tasks, aggregates metrics, and visualises the resilience matrix via a Streamlit dashboard. *Note: by default the master node also contributes inference (controlled by the `exclude_master` config parameter) — you do NOT need a separate worker on the master machine.*
+*   **Master Node (`rbac_benchmark/orchestration/master_node.py`):** Orchestrates execution, dispatches generation tasks, and aggregates metrics. *Note: by default the master node also contributes inference (controlled by the `exclude_master` config parameter) — you do NOT need a separate worker on the master machine.*
+*   **Web UI (`rbac_benchmark/server/app.py`):** FastAPI application serving Jinja2 HTML shells with client-side data loading via `/api/*` JSON endpoints. Launch with `uvicorn rbac_benchmark.server.app:app --reload --port 8000`.
 *   **Worker Node (`rbac_benchmark/worker/node.py`):** A lightweight UDP-discoverable daemon that processes inference tasks via a local Ollama instance.
 *   **LLM-as-a-Judge (`rbac_benchmark/evaluation/llm_judge.py`):** Analyses target `[THOUGHT]` traces to grade both psychological axes — awareness and Cialdini manipulation lever (runs at temperature 0 for reproducibility).
 *   **Payload Generators (`rbac_benchmark/generation/`):** Automated red-team / blue-team modules that synthesise attack payloads and resilient system prompts.
 
-Console entry points (after `pip install -e .`): `rbac-dashboard`, `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`.
+Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`.
 
 ## Installation
 
 ### Prerequisites
 
-*   Linux Platform
+*   Linux Platform (recommended)
 *   Python 3.10+
 *   [Ollama](https://ollama.com/) installed and running locally on the worker nodes.
 
@@ -91,31 +92,41 @@ Console entry points (after `pip install -e .`): `rbac-dashboard`, `rbac-master`
 Two bash scripts are provided to automatically configure and start the nodes:
 
 1.  **On the Worker Node(s):**
-    Run the worker setup script. This will expose the Ollama server to the network (`0.0.0.0`) and start the worker daemon.
+    Run the worker setup script. This exposes the Ollama server to the network (`0.0.0.0`) and starts the worker daemon.
     ```bash
     bash start_worker.sh
     ```
 
 2.  **On the Master Node:**
-    Run the master setup script. This will start Ollama locally and launch the Streamlit Control Center dashboard.
+    Run the master setup script. This starts Ollama locally and launches the web UI.
     ```bash
     bash start_master.sh
     ```
 
+    Or start the web UI directly:
+    ```bash
+    uvicorn rbac_benchmark.server.app:app --reload --port 8000
+    ```
+    Then open `http://localhost:8000` in your browser.
+
 ## Usage
 
-The dashboard (`rbac-dashboard`) has five tabs:
+The web UI (`http://localhost:8000`) has five pages:
 
-1.  **Configure and Dispatch:**
-    *   On the **Control Center** tab, configure your execution parameters in the sidebar (target models, iterations, max tool-calling turns).
-    *   Click **▶ Run Benchmark** to begin the automated evaluation; live logs, a progress bar, and an outcome pie update in place.
+1.  **Control Center (`/control`):**
+    Configure execution parameters (target models, iterations, max tool-calling turns) and click **▶ Run Benchmark** to begin. Live logs and a progress bar stream via SSE; an outcome pie updates in place.
 
-2.  **Analyze Results:**
-    On the **Dashboard & Results** tab, view the TPR/FPR KPIs, the Control Illusion Psychological Matrix, the Model Resilience Radar, the per-defense performance table, and the Phase-2 attack-validity / ΔTPR views.
+2.  **Dashboard (`/dashboard`):**
+    View TPR/FPR KPIs, the Control Illusion Psychological Matrix, the Model Resilience Radar, the per-defense performance table, and Phase-2 attack-validity / ΔTPR views.
 
-3.  **Generate Payloads / Defenses:** The **Payload Generation** tab drives the Gemini red-team / blue-team generators and the Phase-2 weak-attack replacer. The **Custom Prompts** tab adds hand-authored defenses.
+3.  **Payload Generation (`/payload`):**
+    Drive the Gemini red-team / blue-team generators and the Phase-2 weak-attack replacer.
 
-4.  **Validate the Judge (Phase 3):** The **Judge Validation (κ)** tab builds a stratified sample of `[THOUGHT]` traces, lets you blind-annotate them, and reports Cohen's κ against the Judge's labels (target κ ≥ 0.80).
+4.  **Custom Prompts (`/prompts`):**
+    Add and manage hand-authored defense prompts.
+
+5.  **Judge Validation (`/kappa`):**
+    Build a stratified sample of `[THOUGHT]` traces, blind-annotate them, and report Cohen's κ against the Judge's labels (target κ ≥ 0.80).
 
 ### Command line
 

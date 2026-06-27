@@ -1,5 +1,37 @@
 /* app.js — shared nav utilities + cluster status polling */
 
+// ── Form state persistence ────────────────────────────────────────────────────
+(function () {
+  const NS = 'rbac:' + location.pathname + ':';
+
+  function save(el) {
+    if (!el.id || el.type === 'password') return;
+    const val = el.type === 'checkbox' ? el.checked : el.value;
+    try { localStorage.setItem(NS + el.id, JSON.stringify(val)); } catch (_) {}
+  }
+
+  function restore() {
+    document.querySelectorAll('input[id], select[id], textarea[id]').forEach(el => {
+      if (el.type === 'password') return;
+      const raw = localStorage.getItem(NS + el.id);
+      if (raw == null) return;
+      try {
+        const val = JSON.parse(raw);
+        if (el.type === 'checkbox') {
+          el.checked = val;
+        } else {
+          el.value = val;
+          el.dispatchEvent(new Event('input', { bubbles: false }));
+        }
+      } catch (_) {}
+    });
+  }
+
+  document.addEventListener('change', e => save(e.target));
+  document.addEventListener('input',  e => save(e.target));
+  document.addEventListener('DOMContentLoaded', restore);
+})();
+
 // ── Cluster status ────────────────────────────────────────────────────────────
 async function refreshClusterStatus() {
   try {
