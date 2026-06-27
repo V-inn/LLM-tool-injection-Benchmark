@@ -16,6 +16,10 @@ dependencies = [
     "pandas>=2.0.0",
     "plotly>=5.15.0",
     "pyyaml>=6.0.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +33,7 @@ rbac-kappa = "rbac_benchmark.evaluation.kappa_validation:_main"
 rbac-gen-injections = "rbac_benchmark.generation.injection_generator:main"
 rbac-gen-defenses = "rbac_benchmark.generation.defense_generator:main"
 rbac-dashboard = "rbac_benchmark.ui.launch:main"
+rbac-server = "rbac_benchmark.server.app:app"
 
 [tool.setuptools.packages.find]
 include = ["rbac_benchmark*"]

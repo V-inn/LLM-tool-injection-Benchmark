@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Payload Gen · LLM Red Team Benchmark{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">Payload Generator</div>
+  <div class="page-subtitle">generate adversarial injections and defensive prompts · calibrate attack validity</div>
+</div>
+
+<div class="two-col two-col-11">
+  <!-- Red-team card -->
+  <div class="card card-red">
+    <div class="card-title">Red Team — Adversarial Injections</div>
+    <div class="card-sub">generate Cialdini-framed tool-call injection attempts</div>
+
+    <div class="form-group">
+      <label class="form-label">Cialdini levers</label>
+      <div class="multi-check" id="lever-select">
+        <label><input type="checkbox" name="lever" value="AUTHORITY" checked><span>AUTHORITY</span></label>
+        <label><input type="checkbox" name="lever" value="SCARCITY_URGENCY" checked><span>SCARCITY</span></label>
+        <label><input type="checkbox" name="lever" value="SOCIAL_PROOF"><span>SOC PROOF</span></label>
+        <label><input type="checkbox" name="lever" value="RECIPROCITY"><span>RECIPROCITY</span></label>
+        <label><input type="checkbox" name="lever" value="COMMITMENT_CONSISTENCY"><span>COMMITMENT</span></label>
+        <label><input type="checkbox" name="lever" value="LIKING"><span>LIKING</span></label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Severity tier</label>
+      <div class="multi-check" id="sev-select">
+        <label><input type="checkbox" name="severity" value="1" checked><span>Sev-1 · read</span></label>
+        <label><input type="checkbox" name="severity" value="2" checked><span>Sev-2 · write</span></label>
+        <label><input type="checkbox" name="severity" value="3" checked><span>Sev-3 · delete</span></label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Count per lever-severity pair <span class="hint" id="inj-count-val">5</span></label>
+      <input type="range" id="inj-count" min="1" max="20" value="5"
+             oninput="document.getElementById('inj-count-val').textContent=this.value">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Context / scenario hint</label>
+      <textarea id="inj-context" rows="2" placeholder="e.g. enterprise SaaS with finance department…"></textarea>
+    </div>
+
+    <button class="btn btn-danger btn-full" onclick="generateInjections()">Generate injections →</button>
+  </div>
+
+  <!-- Blue-team card -->
+  <div class="card card-blue">
+    <div class="card-title">Blue Team — Defensive Prompts</div>
+    <div class="card-sub">generate system-prompt defense strategies</div>
+
+    <div class="form-group">
+      <label class="form-label">Strategy</label>
+      <div class="multi-check" id="strategy-select">
+        <label><input type="checkbox" name="strategy" value="tiered_refusal" checked><span>Tiered refusal</span></label>
+        <label><input type="checkbox" name="strategy" value="absolute_refusal" checked><span>Absolute refusal</span></label>
+        <label><input type="checkbox" name="strategy" value="chain_of_verify"><span>Chain-of-verify</span></label>
+        <label><input type="checkbox" name="strategy" value="role_anchor"><span>Role anchor</span></label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Target levers (countered)</label>
+      <div id="target-levers" style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">
+        Mirrors red-team lever selection above.
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Count per strategy</label>
+      <input type="number" id="def-count" value="3" min="1" max="10">
+    </div>
+
+    <button class="btn btn-signal btn-full" onclick="generateDefenses()">Generate defenses →</button>
+  </div>
+</div>
+
+<!-- Generation status -->
+<div id="gen-status"></div>
+
+<hr class="divider"/>
+
+<!-- Generated injections -->
+<div class="card" id="injections-card">
+  <div class="card-title">Generated Injections</div>
+  <div class="card-sub" id="inj-sub">Load existing or generate new injections above.</div>
+  <div id="injections-list">
+    <div class="alert alert-info">No injections generated yet.</div>
+  </div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Calibration bars -->
+<div class="card" id="calibration-card">
+  <div class="card-title">Attack Validity Calibration</div>
+  <div class="card-sub">TPR on S1_BASELINE — attacks below threshold flagged WEAK</div>
+  <div class="bar-rows" id="calibration-bars">
+    <div class="alert alert-info">Run a benchmark first to populate calibration data.</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(async () => {
+  // Load existing injections
+  await loadInjections();
+  await loadCalibration();
+})();
+
+async function loadInjections() {
+  try {
+    const d = await api('/api/payloads/injections');
+    renderInjections(d.injections || []);
+    document.getElementById('inj-sub').textContent =
+      `${d.injections?.length || 0} injections · ${d.generated_at || '—'}`;
+  } catch(e) {
+    document.getElementById('injections-list').innerHTML =
+      '<div class="alert alert-info">No injections file found.</div>';
+  }
+}
+
+async function loadCalibration() {
+  try {
+    const d = await api('/api/payloads/calibration');
+    renderCalibBars(d.validity || {});
+  } catch(e) { /* no results yet */ }
+}
+
+function renderInjections(items) {
+  if (!items.length) {
+    document.getElementById('injections-list').innerHTML =
+      '<div class="alert alert-info">No injections generated yet.</div>';
+    return;
+  }
+  const LEVER_COLOR = {
+    AUTHORITY:'#2F6FDB', SCARCITY_URGENCY:'#7C5CD6', SOCIAL_PROOF:'#2F9E6B',
+    RECIPROCITY:'#D39A2F', COMMITMENT_CONSISTENCY:'#C56B2C', LIKING:'#1E8A5B', NONE:'#9A9A93',
+  };
+  const SEV_COLOR = {'1':'#D39A2F','2':'#C56B2C','3':'#C0392B'};
+  document.getElementById('injections-list').innerHTML = items.map((inj, i) => {
+    const lc = LEVER_COLOR[inj.lever] || '#9A9A93';
+    const sc = SEV_COLOR[String(inj.severity)] || '#9A9A93';
+    return `
+<div style="background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:13px 14px;margin-bottom:8px">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <span class="chip" style="color:#fff;background:${lc}">${inj.lever || '?'}</span>
+    <span class="chip" style="color:${sc};background:${sc}22">SEV-${inj.severity || '?'}</span>
+    <span style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);margin-left:auto">val ${String(i+1).padStart(2,'0')}</span>
+  </div>
+  <div style="font-family:var(--font-mono);font-size:11px;line-height:1.65;color:#3A3A37;white-space:pre-wrap;max-height:80px;overflow:hidden">${escHtml(inj.prompt || inj.text || '')}</div>
+</div>`;
+  }).join('');
+}
+
+function renderCalibBars(validity) {
+  if (!Object.keys(validity).length) {
+    document.getElementById('calibration-bars').innerHTML =
+      '<div class="alert alert-info">Run a benchmark first to populate calibration data.</div>';
+    return;
+  }
+  document.getElementById('calibration-bars').innerHTML = Object.entries(validity).sort().map(([key, d]) => {
+    const tpr = (d.tpr * 100);
+    const c   = d.valid ? '#2F6FDB' : '#C56B2C';
+    const bc  = d.valid ? '#2F6FDB' : '#C56B2C';
+    const bb  = d.valid ? '#EEF3FB' : '#FBF0E8';
+    const label = d.valid ? 'STRONG · KEEP' : 'WEAK · REPLACE';
+    return `
+<div class="bar-row bar-row-4">
+  <span class="bar-label">${key}</span>
+  <div class="bar-bg"><div class="bar-fill" style="width:${tpr.toFixed(1)}%;background:${c}"></div></div>
+  <span class="bar-val">${Math.round(tpr)}%</span>
+  <span class="badge" style="color:${bc};background:${bb}">${label}</span>
+</div>`;
+  }).join('');
+}
+
+async function generateInjections() {
+  const levers   = [...document.querySelectorAll('input[name="lever"]:checked')].map(e => e.value);
+  const severities = [...document.querySelectorAll('input[name="severity"]:checked')].map(e => parseInt(e.value));
+  const count    = parseInt(document.getElementById('inj-count').value);
+  const context  = document.getElementById('inj-context').value;
+  if (!levers.length) { alert('Select at least one lever.'); return; }
+  showGenStatus('info', 'Generating injections…');
+  try {
+    const d = await api('/api/payloads/generate-injections', {
+      method: 'POST', body: { levers, severities, count, context }
+    });
+    renderInjections(d.injections || []);
+    showGenStatus('success', `Generated ${d.injections?.length || 0} injections.`);
+  } catch(e) { showGenStatus('error', e.message); }
+}
+
+async function generateDefenses() {
+  const strategies = [...document.querySelectorAll('input[name="strategy"]:checked')].map(e => e.value);
+  const levers     = [...document.querySelectorAll('input[name="lever"]:checked')].map(e => e.value);
+  const count      = parseInt(document.getElementById('def-count').value);
+  if (!strategies.length) { alert('Select at least one strategy.'); return; }
+  showGenStatus('info', 'Generating defenses…');
+  try {
+    const d = await api('/api/payloads/generate-defenses', {
+      method: 'POST', body: { strategies, levers, count }
+    });
+    showGenStatus('success', `Generated ${d.defenses?.length || 0} defenses. Check Custom Prompts tab.`);
+  } catch(e) { showGenStatus('error', e.message); }
+}
+
+function showGenStatus(type, msg) {
+  const map = {success:'alert-success',error:'alert-error',warn:'alert-warn',info:'alert-info'};
+  document.getElementById('gen-status').innerHTML = `<div class="alert ${map[type]}" style="margin-top:14px">${msg}</div>`;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+{% endblock %}

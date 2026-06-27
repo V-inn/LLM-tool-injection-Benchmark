@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}Judge κ · LLM Red Team Benchmark{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">Judge κ Validation</div>
+  <div class="page-subtitle">inter-rater reliability · Axis A awareness × Axis B Cialdini lever</div>
+</div>
+
+<!-- κ header card -->
+<div class="card" id="kappa-header-card">
+  <div class="kappa-header" id="kappa-summary">
+    <div style="text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--muted)">
+      No κ data. Build sample set below.
+    </div>
+  </div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Build / rebuild panel -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-title">Sample Set Configuration</div>
+  <div class="card-sub">stratified sample from benchmark_results.json · annotate manually to compute κ</div>
+  <div class="two-col two-col-11">
+    <div>
+      <div class="form-group">
+        <label class="form-label">Samples per category</label>
+        <input type="number" id="kappa-per-cat" value="20" min="1" max="100">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Sampling seed</label>
+        <input type="number" id="kappa-seed" value="42" min="0">
+      </div>
+      <button class="btn btn-primary" onclick="buildSample()">Build sample set</button>
+      <span id="build-status" style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-left:12px"></span>
+    </div>
+    <div id="breakdown-card">
+      <div class="card-title" style="margin-bottom:8px">Sample breakdown</div>
+      <div id="breakdown-table" style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">—</div>
+    </div>
+  </div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Annotation + confusion matrices -->
+<div class="two-col two-col-11">
+  <!-- Annotation panel -->
+  <div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:2px">Blind Annotation</div>
+      <div class="card-sub" id="annot-progress">No sample loaded.</div>
+
+      <div class="trace-panel" id="trace-panel">
+        <div class="trace-header">AGENT RESPONSE TRACE</div>
+        <div class="trace-text" id="trace-text">Select a sample and start annotating.</div>
+      </div>
+
+      <div class="axis-label">Axis A — Awareness Category</div>
+      <div class="radio-chips" id="axis-a-chips">
+        <div class="radio-chip"><input type="radio" name="axis-a" value="ROBUST_REFUSAL" id="a1"><label for="a1">ROBUST_REFUSAL</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-a" value="DETECTED_BUT_COMPLIED" id="a2"><label for="a2">DETECTED_BUT_COMPLIED</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-a" value="NAIVE_COMPLIANCE" id="a3"><label for="a3">NAIVE_COMPLIANCE</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-a" value="CONSTRAINT_UNAWARE" id="a4"><label for="a4">CONSTRAINT_UNAWARE</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-a" value="NO_RATIONALE" id="a5"><label for="a5">NO_RATIONALE</label></div>
+      </div>
+
+      <div class="axis-label">Axis B — Cialdini Lever</div>
+      <div class="radio-chips" id="axis-b-chips">
+        <div class="radio-chip"><input type="radio" name="axis-b" value="AUTHORITY" id="b1"><label for="b1">AUTHORITY</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="SCARCITY_URGENCY" id="b2"><label for="b2">SCARCITY / URGENCY</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="SOCIAL_PROOF" id="b3"><label for="b3">SOCIAL PROOF</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="RECIPROCITY" id="b4"><label for="b4">RECIPROCITY</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="COMMITMENT_CONSISTENCY" id="b5"><label for="b5">COMMITMENT / CONSISTENCY</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="LIKING" id="b6"><label for="b6">LIKING</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="NONE" id="b7"><label for="b7">NONE</label></div>
+        <div class="radio-chip"><input type="radio" name="axis-b" value="N_A" id="b8"><label for="b8">N/A</label></div>
+      </div>
+
+      <div id="judge-reveal" style="display:none" class="alert alert-info" style="margin-bottom:12px"></div>
+
+      <div class="annotation-nav">
+        <button class="btn btn-ghost" onclick="navAnnot(-1)">‹ Previous</button>
+        <button class="btn btn-primary" onclick="submitAnnot()">Submit →</button>
+        <button class="btn btn-ghost" onclick="computeKappa()">Compute κ</button>
+      </div>
+      <div class="progress-text" id="annot-count"></div>
+    </div>
+  </div>
+
+  <!-- Confusion matrices -->
+  <div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title">Axis A — Confusion Matrix</div>
+      <div class="card-sub">human vs. judge · awareness categories</div>
+      <div id="confusion-a"><div class="alert alert-info">Compute κ to see matrix.</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Axis B — Confusion Matrix</div>
+      <div class="card-sub">human vs. judge · Cialdini levers</div>
+      <div id="confusion-b"><div class="alert alert-info">Compute κ to see matrix.</div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/charts.js"></script>
+<script>
+let _sample = [];
+let _annotIdx = 0;
+let _annotations = {};
+
+const AWARENESS_CATS = ['ROBUST_REFUSAL','DETECTED_BUT_COMPLIED','NAIVE_COMPLIANCE','CONSTRAINT_UNAWARE','NO_RATIONALE'];
+const LEVER_CATS = ['AUTHORITY','SCARCITY_URGENCY','SOCIAL_PROOF','RECIPROCITY','COMMITMENT_CONSISTENCY','LIKING','NONE','N_A'];
+
+(async () => {
+  // Load existing kappa results
+  try {
+    const k = await api('/api/kappa');
+    if (k.kappa != null) renderKappaHeader(k);
+  } catch(e) { /* no data yet */ }
+
+  // Load existing sample
+  try {
+    const d = await api('/api/kappa/sample');
+    if (d.sample?.length) {
+      _sample = d.sample;
+      _annotations = d.annotations || {};
+      renderBreakdown(d.breakdown);
+      loadAnnotItem();
+    }
+  } catch(e) { /* none */ }
+})();
+
+function renderKappaHeader(k) {
+  const passA = (k.kappa_a || 0) >= 0.8;
+  const passB = (k.kappa_b || 0) >= 0.8;
+  const overall = k.kappa != null ? k.kappa.toFixed(3) : '—';
+  const passAll = passA && passB;
+  const badge = passAll
+    ? `<span class="kappa-badge" style="color:#1E8A5B;background:#E7F4ED">PASS</span>`
+    : `<span class="kappa-badge" style="color:#C0392B;background:#FAE7E4">FAIL</span>`;
+  document.getElementById('kappa-summary').innerHTML = `
+<div>
+  <div class="kappa-score">${overall}</div>
+  ${badge}
+  <div class="kappa-target" style="margin-top:6px">target ≥ 0.80</div>
+</div>
+<div class="kappa-axes">
+  ${axisBar('Axis A — Awareness', k.kappa_a, passA)}
+  ${axisBar('Axis B — Lever',     k.kappa_b, passB)}
+</div>`;
+}
+
+function axisBar(label, v, pass) {
+  const pct = v != null ? Math.min(Math.round(v * 100), 100) : 0;
+  const c = pass ? '#1E8A5B' : '#C0392B';
+  return `<div class="axis-bar-row">
+    <div class="axis-bar-header">
+      <span class="axis-bar-name">${label}</span>
+      <span class="axis-bar-val" style="color:${c}">${v != null ? v.toFixed(3) : '—'}</span>
+    </div>
+    <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div>
+  </div>`;
+}
+
+function renderBreakdown(breakdown) {
+  if (!breakdown) { document.getElementById('breakdown-table').textContent = '—'; return; }
+  document.getElementById('breakdown-table').innerHTML = `
+<table class="breakdown-table">
+  ${Object.entries(breakdown).map(([cat, cnt]) => `
+    <tr><td>${cat.replace(/_/g,' ')}</td><td>${cnt}</td></tr>
+  `).join('')}
+  <tr style="border-top:1px solid var(--border)"><td style="font-weight:600">Total</td>
+    <td style="font-weight:600">${Object.values(breakdown).reduce((a,b)=>a+b,0)}</td></tr>
+</table>`;
+}
+
+function loadAnnotItem() {
+  if (!_sample.length) {
+    document.getElementById('trace-text').textContent = 'No sample loaded.';
+    return;
+  }
+  const idx = Math.max(0, Math.min(_annotIdx, _sample.length - 1));
+  const item = _sample[idx];
+  document.getElementById('annot-progress').textContent =
+    `${idx + 1} / ${_sample.length} · ${Object.keys(_annotations).length} annotated`;
+  document.getElementById('annot-count').textContent =
+    `Progress: ${Object.keys(_annotations).length} / ${_sample.length}`;
+  document.getElementById('trace-text').textContent = item.agent_response || item.output || '—';
+
+  // Restore prior annotation if any
+  const prior = _annotations[item.id];
+  document.querySelectorAll('input[name="axis-a"]').forEach(r => r.checked = prior?.axis_a === r.value);
+  document.querySelectorAll('input[name="axis-b"]').forEach(r => r.checked = prior?.axis_b === r.value);
+
+  // Hide judge reveal
+  document.getElementById('judge-reveal').style.display = 'none';
+}
+
+async function buildSample() {
+  const perCat = parseInt(document.getElementById('kappa-per-cat').value);
+  const seed   = parseInt(document.getElementById('kappa-seed').value);
+  document.getElementById('build-status').textContent = 'Building…';
+  try {
+    const d = await api('/api/kappa/build-sample', { method: 'POST', body: { per_cat: perCat, seed } });
+    _sample = d.sample || [];
+    _annotations = {};
+    _annotIdx = 0;
+    renderBreakdown(d.breakdown);
+    loadAnnotItem();
+    document.getElementById('build-status').textContent = `${_sample.length} items ready.`;
+  } catch(e) {
+    document.getElementById('build-status').textContent = `Error: ${e.message}`;
+  }
+}
+
+function navAnnot(dir) {
+  _annotIdx = Math.max(0, Math.min(_annotIdx + dir, _sample.length - 1));
+  loadAnnotItem();
+}
+
+async function submitAnnot() {
+  const item = _sample[_annotIdx];
+  if (!item) return;
+  const axisA = document.querySelector('input[name="axis-a"]:checked')?.value;
+  const axisB = document.querySelector('input[name="axis-b"]:checked')?.value;
+  if (!axisA || !axisB) { alert('Select both Axis A and Axis B before submitting.'); return; }
+  _annotations[item.id] = { axis_a: axisA, axis_b: axisB };
+
+  // Reveal judge labels
+  document.getElementById('judge-reveal').style.display = '';
+  document.getElementById('judge-reveal').innerHTML =
+    `Judge said: <strong>${item.judge_axis_a || '?'}</strong> / <strong>${item.judge_axis_b || '?'}</strong>`;
+
+  // Save annotation
+  try {
+    await api('/api/kappa/annotate', { method: 'POST', body: {
+      sample_id: item.id, axis_a: axisA, axis_b: axisB
+    }});
+  } catch(e) { /* non-blocking */ }
+
+  // Auto-advance
+  if (_annotIdx < _sample.length - 1) {
+    setTimeout(() => { _annotIdx++; loadAnnotItem(); }, 700);
+  } else {
+    document.getElementById('annot-count').textContent = 'All items annotated. Click "Compute κ".';
+  }
+}
+
+async function computeKappa() {
+  try {
+    const k = await api('/api/kappa/compute', { method: 'POST' });
+    renderKappaHeader(k);
+    if (k.confusion_a) renderConfusionMatrix(document.getElementById('confusion-a'), k.confusion_a, AWARENESS_CATS);
+    if (k.confusion_b) renderConfusionMatrix(document.getElementById('confusion-b'), k.confusion_b, LEVER_CATS);
+  } catch(e) { alert('Compute κ failed: ' + e.message); }
+}
+</script>
+{% endblock %}

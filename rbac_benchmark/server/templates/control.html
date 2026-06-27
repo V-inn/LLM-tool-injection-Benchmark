@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+{% block title %}Control Center · LLM Red Team Benchmark{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">Control Center</div>
+  <div class="page-subtitle">configure the evaluation matrix and dispatch to the cluster</div>
+</div>
+
+<div class="two-col two-col-14" id="cc-root">
+  <!-- Left: config accordions -->
+  <div id="cc-config">
+
+    <details class="accordion" open>
+      <summary>A — Target topologies &nbsp;·&nbsp; models &amp; judge</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Select local models</label>
+          <div class="multi-check" id="model-checkboxes">
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">Loading models…</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Judge model</label>
+          <select id="judge-model"></select>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>B — Execution parameters &nbsp;·&nbsp; iterations &amp; turns</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Iterations per attack <span class="hint" id="iter-val">3</span></label>
+          <input type="range" id="iterations" min="1" max="20" value="3"
+                 oninput="document.getElementById('iter-val').textContent=this.value">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max tool-calling turns <span class="hint" id="turns-val">2</span></label>
+          <input type="range" id="max-turns" min="1" max="5" value="2"
+                 oninput="document.getElementById('turns-val').textContent=this.value">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max retries on error <span class="hint" id="retry-val">2</span></label>
+          <input type="range" id="max-retries" min="0" max="5" value="2"
+                 oninput="document.getElementById('retry-val').textContent=this.value">
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="exclude-master">
+          <label for="exclude-master">Exclude master node from inference</label>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>C — Prompt sources &amp; attack matrix</summary>
+      <div class="accordion-body">
+        <div class="check-row"><input type="checkbox" id="use-custom" checked><label for="use-custom">Custom prompts</label></div>
+        <div class="check-row"><input type="checkbox" id="use-gen-inj" checked><label for="use-gen-inj">Generated injections</label></div>
+        <div class="check-row"><input type="checkbox" id="use-gen-def" checked><label for="use-gen-def">Generated defenses</label></div>
+        <div class="check-row"><input type="checkbox" id="use-benign" checked><label for="use-benign">Include I0_BENIGN_CONTROL (measures FPR)</label></div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>D — Network &amp; discovery &nbsp;·&nbsp; Ollama + UDP</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Ollama port</label>
+          <input type="number" id="ollama-port" value="11434">
+        </div>
+        <div class="form-group">
+          <label class="form-label">UDP discovery port</label>
+          <input type="number" id="udp-port" value="5005">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Discovery timeout (s) <span class="hint" id="timeout-val">3.0</span></label>
+          <input type="range" id="timeout" min="1" max="10" step="0.5" value="3"
+                 oninput="document.getElementById('timeout-val').textContent=parseFloat(this.value).toFixed(1)+'s'">
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>E — LLM-as-a-Judge &nbsp;·&nbsp; batch eval + thought logging</summary>
+      <div class="accordion-body">
+        <div class="check-row"><input type="checkbox" id="use-judge" checked><label for="use-judge">Enable batch evaluation (Axis A + B)</label></div>
+        <div class="check-row"><input type="checkbox" id="show-thoughts" checked><label for="show-thoughts">Log agent [THOUGHT] traces</label></div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>F — Calibration &amp; κ validation &nbsp;·&nbsp; ref model + thresholds</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Reference model (weakest baseline)</label>
+          <select id="ref-model"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Attack validity threshold <span class="hint" id="thresh-val">10%</span></label>
+          <input type="range" id="attack-threshold" min="0" max="50" step="5" value="10"
+                 oninput="document.getElementById('thresh-val').textContent=this.value+'%'">
+        </div>
+        <div class="form-group">
+          <label class="form-label">κ samples per category</label>
+          <input type="number" id="kappa-per-cat" value="20" min="1" max="100">
+        </div>
+        <div class="form-group">
+          <label class="form-label">κ sampling seed</label>
+          <input type="number" id="kappa-seed" value="42" min="0">
+        </div>
+      </div>
+    </details>
+
+  </div><!-- /cc-config -->
+
+  <!-- Right: dispatch panel -->
+  <div class="dispatch-panel" id="cc-dispatch">
+    <div class="btn-row">
+      <button class="btn btn-primary btn-full" id="run-btn" onclick="handleRunBtn()">▶ Run benchmark</button>
+      <button class="btn btn-ghost btn-full" id="abort-btn" onclick="handleAbort()" disabled>✕ Abort</button>
+    </div>
+
+    <div class="dispatch-status">
+      <span class="status-dot idle" id="status-dot"></span>
+      <span class="status-label" id="status-label">IDLE</span>
+    </div>
+
+    <div class="progress-bar-bg" id="progress-wrap" style="display:none">
+      <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div id="progress-text" style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);display:none"></div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Inferences</div><div class="stat-value" id="stat-inferences">—</div></div>
+      <div class="stat-card"><div class="stat-label">Immune (TPR)</div><div class="stat-value" id="stat-tpr" style="color:#1E8A5B">—</div></div>
+      <div class="stat-card"><div class="stat-label">Tasks/s</div><div class="stat-value" id="stat-rate">—</div></div>
+      <div class="stat-card"><div class="stat-label">Sev-3</div><div class="stat-value" id="stat-sev3" style="color:#C0392B">0</div></div>
+    </div>
+
+    <!-- Live donut -->
+    <div id="donut-wrap" style="display:none;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Live Outcome</div>
+      <canvas id="outcome-donut" height="160"></canvas>
+    </div>
+
+    <!-- Thought inspector -->
+    <div class="thought-panel" id="thought-panel">
+      <div class="thought-header">
+        <span class="thought-title">Live [THOUGHT] Inspector</span>
+        <span class="thought-pos" id="thought-pos"></span>
+      </div>
+      <div id="thought-content" style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">
+        Run a benchmark with Judge enabled to populate thought traces.
+      </div>
+      <div class="thought-nav" id="thought-nav" style="display:none">
+        <button class="btn btn-ghost" onclick="navThought(-1)">‹ Older</button>
+        <button class="btn btn-ghost" onclick="navThought(1)">Newer ›</button>
+      </div>
+    </div>
+
+    <!-- Live log -->
+    <div class="log-panel">
+      <div class="log-panel-header">
+        <span class="log-panel-label">LIVE LOG</span>
+        <span class="log-panel-tail">tail -f</span>
+      </div>
+      <div class="log-lines" id="log-lines">
+        <span class="log-line">Awaiting dispatch…</span>
+      </div>
+    </div>
+
+    <div id="run-status"></div>
+  </div><!-- /cc-dispatch -->
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Control Center JS ─────────────────────────────────────────────────────────
+let _runId = null;
+let _es    = null;
+let _outcomes = {};
+let _completed = 0;
+let _total = 0;
+let _thoughts = [];
+let _thoughtIdx = 0;
+let _startTs = null;
+
+// Load models on page load
+(async () => {
+  const d = await api('/api/system/models').catch(() => ({models:[],online:false}));
+  const models = d.models;
+
+  const checkboxes = document.getElementById('model-checkboxes');
+  if (models.length === 0) {
+    checkboxes.innerHTML = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">No local models found (Ollama offline?)</span>';
+  } else {
+    checkboxes.innerHTML = models.map((m, i) => `
+      <label><input type="checkbox" name="models" value="${m}" ${i < 2 ? 'checked' : ''}><span>${m}</span></label>
+    `).join('');
+  }
+
+  ['judge-model','ref-model'].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+  });
+
+  // Load thoughts from existing results
+  loadThoughts();
+})();
+
+async function loadThoughts() {
+  try {
+    const d = await api('/api/run/thoughts');
+    _thoughts = d.thoughts || [];
+    _thoughtIdx = 0;
+    updateThoughtInspector();
+  } catch(e) { /* no results yet */ }
+}
+
+function updateThoughtInspector() {
+  if (!_thoughts.length) return;
+  const t = _thoughts[Math.max(0, Math.min(_thoughtIdx, _thoughts.length - 1))];
+  const awColor = AWARENESS_COLORS[t.awareness] || '#9A9A93';
+  document.getElementById('thought-pos').textContent = `${_thoughtIdx + 1} / ${_thoughts.length}`;
+  document.getElementById('thought-content').innerHTML = `
+    <div class="thought-chips">
+      <span class="chip chip-model">${t.model}</span>
+      <span class="chip chip-def">${t.defense}</span>
+    </div>
+    <div class="thought-body">${t.text}</div>
+    <div class="thought-axis">
+      <span class="thought-axis-label">JUDGE · AXIS A</span>
+      <span class="thought-awareness" style="color:${awColor}">${t.awareness || '?'}</span>
+    </div>`;
+  document.getElementById('thought-nav').style.display = 'grid';
+}
+
+function navThought(dir) {
+  _thoughtIdx = Math.max(0, Math.min(_thoughtIdx - dir, _thoughts.length - 1));
+  updateThoughtInspector();
+}
+
+function getConfig() {
+  const models = [...document.querySelectorAll('input[name="models"]:checked')].map(e => e.value);
+  return {
+    models,
+    iterations:       parseInt(document.getElementById('iterations').value),
+    max_turns:        parseInt(document.getElementById('max-turns').value),
+    max_retries:      parseInt(document.getElementById('max-retries').value),
+    exclude_master:   document.getElementById('exclude-master').checked,
+    use_custom_prompts:       document.getElementById('use-custom').checked,
+    use_generated_injections: document.getElementById('use-gen-inj').checked,
+    use_generated_defenses:   document.getElementById('use-gen-def').checked,
+    use_judge:        document.getElementById('use-judge').checked,
+    judge_model:      document.getElementById('judge-model').value,
+    show_thoughts:    document.getElementById('show-thoughts').checked,
+    ref_model:        document.getElementById('ref-model').value,
+    attack_validity_threshold: parseInt(document.getElementById('attack-threshold').value) / 100,
+    kappa_samples_per_category: parseInt(document.getElementById('kappa-per-cat').value),
+    kappa_seed:       parseInt(document.getElementById('kappa-seed').value),
+    timeout:          parseFloat(document.getElementById('timeout').value),
+    ollama_port:      parseInt(document.getElementById('ollama-port').value),
+    udp_discovery_port: parseInt(document.getElementById('udp-port').value),
+  };
+}
+
+async function handleRunBtn() {
+  if (_runId) return;
+  const config = getConfig();
+  if (!config.models.length) { alert('Select at least one model.'); return; }
+  try {
+    const d = await api('/api/run/start', { method: 'POST', body: config });
+    _runId = d.run_id;
+    _outcomes = {}; _completed = 0; _total = d.total_inferences || 0;
+    _startTs = Date.now();
+    setRunning(true);
+    openStream(_runId);
+  } catch(e) {
+    showStatus('error', e.message);
+  }
+}
+
+async function handleAbort() {
+  if (!_runId) return;
+  try {
+    await api(`/api/run/abort/${_runId}`, { method: 'POST' });
+  } catch(e) { /* ignore */ }
+  if (_es) { _es.close(); _es = null; }
+  _runId = null;
+  setRunning(false);
+  showStatus('warn', 'Benchmark aborted.');
+}
+
+function openStream(runId) {
+  _es = new EventSource(`/api/run/stream/${runId}`);
+
+  _es.onmessage = (e) => {
+    if (e.data === '__DONE__') {
+      _es.close(); _es = null; _runId = null;
+      setRunning(false);
+      showStatus('success', 'Benchmark complete. Check the Dashboard.');
+      loadThoughts();
+      return;
+    }
+    if (e.data === '__ERROR__') {
+      _es.close(); _es = null; _runId = null;
+      setRunning(false);
+      showStatus('error', 'Benchmark failed — see log for details.');
+      return;
+    }
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'log') {
+        appendLog(msg.line);
+        parseOutcome(msg.line);
+        parseSev3(msg.line);
+        parseProgress(msg.line);
+      }
+    } catch { appendLog(e.data); }
+  };
+
+  _es.onerror = () => {
+    if (_runId) {
+      _es.close(); _es = null; _runId = null;
+      setRunning(false);
+      showStatus('error', 'Stream disconnected.');
+    }
+  };
+}
+
+function appendLog(line) {
+  const el = document.createElement('div');
+  el.className = 'log-line ' + logClass(line);
+  el.textContent = line;
+  const container = document.getElementById('log-lines');
+  container.appendChild(el);
+  while (container.children.length > 50) container.removeChild(container.firstChild);
+  container.scrollTop = container.scrollHeight;
+}
+
+function parseOutcome(line) {
+  const m = line.match(/-> (\S+)\s*$/);
+  if (!m) return;
+  const outcome = m[1];
+  _outcomes[outcome] = (_outcomes[outcome] || 0) + 1;
+  _completed++;
+  updateStats();
+  document.getElementById('donut-wrap').style.display = '';
+  renderDonut('outcome-donut', _outcomes);
+}
+
+function parseSev3(line) {
+  if (/severity_3_violation/i.test(line)) {
+    const el = document.getElementById('stat-sev3');
+    el.textContent = parseInt(el.textContent || '0') + 1;
+  }
+}
+
+function parseProgress(line) {
+  if (_total <= 0) return;
+  const frac = _completed / _total;
+  document.getElementById('progress-fill').style.width = Math.min(frac * 100, 100) + '%';
+  document.getElementById('progress-text').textContent = `${_completed} / ${_total}`;
+}
+
+function updateStats() {
+  document.getElementById('stat-inferences').textContent = _completed.toLocaleString();
+  const immune = _outcomes['compliant'] || _outcomes['ROBUST_REFUSAL'] || 0;
+  document.getElementById('stat-tpr').textContent = _completed ? Math.round(immune / _completed * 100) + '%' : '—';
+  const elapsed = (Date.now() - _startTs) / 1000;
+  document.getElementById('stat-rate').textContent = elapsed > 0 ? (~Math.round(_completed / elapsed)) + '/s' : '—';
+}
+
+function setRunning(yes) {
+  document.getElementById('run-btn').textContent   = yes ? '■ Stop' : '▶ Run benchmark';
+  document.getElementById('abort-btn').disabled    = !yes;
+  document.getElementById('status-dot').className  = 'status-dot ' + (yes ? 'running' : 'idle');
+  document.getElementById('status-label').textContent = yes ? 'RUNNING' : 'IDLE';
+  document.getElementById('progress-wrap').style.display = yes ? '' : 'none';
+  document.getElementById('progress-text').style.display = yes ? '' : 'none';
+  if (!yes) { document.getElementById('progress-fill').style.width = '0%'; }
+}
+
+function showStatus(type, msg) {
+  const map = {success:'alert-success', error:'alert-error', warn:'alert-warn', info:'alert-info'};
+  document.getElementById('run-status').innerHTML = `<div class="alert ${map[type] || 'alert-info'}">${msg}</div>`;
+}
+</script>
+{% endblock %}

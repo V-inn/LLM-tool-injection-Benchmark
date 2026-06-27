@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · LLM Red Team Benchmark{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+  <div>
+    <div class="page-title">Dashboard</div>
+    <div class="page-subtitle">security metrics · control-illusion analysis</div>
+  </div>
+  <div style="display:flex;gap:8px" id="dash-actions"></div>
+</div>
+
+<!-- KPI strip -->
+<div class="kpi-strip">
+  <div class="kpi"><div class="kpi-label">Total Inferences</div><div class="kpi-value" id="kpi-total">—</div></div>
+  <div class="kpi"><div class="kpi-label">Global Immunity (TPR)</div><div class="kpi-value" id="kpi-tpr">—</div></div>
+  <div class="kpi"><div class="kpi-label">Over-Refusal (FPR)</div><div class="kpi-value" id="kpi-fpr">—</div></div>
+  <div class="kpi"><div class="kpi-label">Critical Failures</div><div class="kpi-value" id="kpi-sev3" style="color:#C0392B">—</div></div>
+  <div class="kpi"><div class="kpi-label">Mean Resilience Index</div><div class="kpi-value" id="kpi-ri">—</div></div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Leaderboard -->
+<div class="card">
+  <div class="card-title">Model Resilience Index</div>
+  <div class="card-sub">composite 0–100 · safety-gated · S≥97 · A≥90 · B≥80 · C≥70 · D≥60 · F&lt;60</div>
+  <div class="leaderboard" id="leaderboard">
+    <div class="alert alert-info">Loading results…</div>
+  </div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Psychological matrix -->
+<div class="card">
+  <div class="card-title">Control Illusion Psychological Matrix</div>
+  <div class="card-sub">trace count · awareness (Axis A) × Cialdini lever (Axis B)</div>
+  <div id="psych-matrix"></div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Radar + Defense bars in 2-col -->
+<div class="two-col two-col-11">
+  <div class="card">
+    <div class="card-title">Model Resilience Radar</div>
+    <div class="card-sub">subscores: immunity · utility · safety · honesty · lever</div>
+    <canvas id="radar-chart" height="280"></canvas>
+  </div>
+  <div class="card">
+    <div class="card-title">Defense Performance Analysis</div>
+    <div class="card-sub">global immunity rate (TPR) averaged across all models</div>
+    <div class="bar-rows" id="defense-bars"></div>
+  </div>
+</div>
+
+<hr class="divider"/>
+
+<!-- Attack validity -->
+<div class="card">
+  <div class="card-title">Phase 2 — Attack Validity Check</div>
+  <div class="card-sub" id="validity-sub">TPR on S1_BASELINE · ref model: —</div>
+  <div class="bar-rows" id="validity-bars"></div>
+</div>
+
+<hr class="divider"/>
+
+<!-- ΔTPR heatmap -->
+<div class="card">
+  <div class="card-title">Phase 2 — ΔTPR Marginal Defense Gain</div>
+  <div class="card-sub">ΔTPR = TPR(advanced defense) − TPR(S1_BASELINE)</div>
+  <div id="delta-heatmap"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/charts.js"></script>
+<script>
+(async () => {
+  try {
+    const [summ, grades, validity, delta] = await Promise.all([
+      api('/api/results'),
+      api('/api/results/grades'),
+      api('/api/results/validity'),
+      api('/api/results/delta'),
+    ]);
+
+    if (!summ.has_results) {
+      document.getElementById('leaderboard').innerHTML =
+        '<div class="alert alert-info">No benchmark results yet. Run a test in the Control Center.</div>';
+      return;
+    }
+
+    // Populate actions
+    document.getElementById('dash-actions').innerHTML = `
+      <a href="/api/results/download" class="btn btn-ghost">Export JSON</a>
+      <button class="btn btn-ghost" onclick="clearResults()">Clear</button>`;
+
+    // KPIs
+    const s = summ.summary;
+    document.getElementById('kpi-total').textContent = s.total_inferences.toLocaleString();
+    document.getElementById('kpi-tpr').textContent   = s.global_immunity_pct.toFixed(1) + '%';
+    document.getElementById('kpi-fpr').textContent   = s.global_fpr_pct != null ? s.global_fpr_pct.toFixed(1) + '%' : 'N/A';
+    document.getElementById('kpi-sev3').textContent  = s.critical_failures;
+    document.getElementById('kpi-ri').textContent    = s.mean_ri != null ? s.mean_ri.toFixed(1) : '—';
+
+    // Leaderboard
+    renderLeaderboard(document.getElementById('leaderboard'), grades.grades);
+
+    // Radar
+    if (Object.keys(grades.grades).length) renderRadar('radar-chart', grades.grades, DOT_COLORS);
+
+    // Matrix
+    renderMatrix(
+      document.getElementById('psych-matrix'),
+      summ.matrix, summ.awareness_cats, summ.lever_cats
+    );
+
+    // Defense bars
+    renderDefenseBars(document.getElementById('defense-bars'), summ.defenses);
+
+    // Validity bars
+    document.getElementById('validity-sub').textContent =
+      `TPR on S1_BASELINE · ref model: ${validity.ref_model} · threshold ≤ ${Math.round(validity.threshold * 100)}%`;
+    renderValidityBars(document.getElementById('validity-bars'), validity.validity);
+
+    // ΔTPR heatmap
+    renderDeltaHeatmap(document.getElementById('delta-heatmap'), delta.delta, delta.ref_model);
+
+  } catch(e) {
+    document.getElementById('leaderboard').innerHTML =
+      `<div class="alert alert-error">Failed to load results: ${e.message}</div>`;
+  }
+})();
+
+async function clearResults() {
+  if (!confirm('Clear all benchmark results?')) return;
+  await api('/api/results/clear', { method: 'POST' });
+  location.reload();
+}
+</script>
+{% endblock %}
