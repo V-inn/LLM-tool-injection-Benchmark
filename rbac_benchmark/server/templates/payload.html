@@ -7,6 +7,19 @@
   <div class="page-subtitle">generate adversarial injections and defensive prompts · calibrate attack validity</div>
 </div>
 
+<!-- Gemini token -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-title">Gemini API Key</div>
+  <div class="card-sub">used for generation only · not stored · overrides .env for this request</div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <input type="password" id="gemini-token" placeholder="AIza…" autocomplete="off"
+           style="flex:1;font-family:var(--font-mono)"
+           oninput="updateTokenState()">
+    <button class="btn btn-ghost" onclick="toggleTokenVis(this)" style="white-space:nowrap;font-size:12px">Show</button>
+    <span id="token-badge" style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">from .env</span>
+  </div>
+</div>
+
 <div class="two-col two-col-11">
   <!-- Red-team card -->
   <div class="card card-red">
@@ -180,6 +193,24 @@ function renderCalibBars(validity) {
   }).join('');
 }
 
+function geminiToken() {
+  return document.getElementById('gemini-token').value.trim();
+}
+
+function updateTokenState() {
+  const t = geminiToken();
+  const badge = document.getElementById('token-badge');
+  badge.textContent  = t ? 'using input key' : 'from .env';
+  badge.style.color  = t ? 'var(--signal)' : 'var(--muted)';
+}
+
+function toggleTokenVis(btn) {
+  const inp = document.getElementById('gemini-token');
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
+
 async function generateInjections() {
   const levers   = [...document.querySelectorAll('input[name="lever"]:checked')].map(e => e.value);
   const severities = [...document.querySelectorAll('input[name="severity"]:checked')].map(e => parseInt(e.value));
@@ -188,9 +219,10 @@ async function generateInjections() {
   if (!levers.length) { alert('Select at least one lever.'); return; }
   showGenStatus('info', 'Generating injections…');
   try {
-    const d = await api('/api/payloads/generate-injections', {
-      method: 'POST', body: { levers, severities, count, context }
-    });
+    const body = { levers, severities, count, context };
+    const tok = geminiToken();
+    if (tok) body.gemini_api_key = tok;
+    const d = await api('/api/payloads/generate-injections', { method: 'POST', body });
     renderInjections(d.injections || []);
     showGenStatus('success', `Generated ${d.injections?.length || 0} injections.`);
   } catch(e) { showGenStatus('error', e.message); }
@@ -203,9 +235,10 @@ async function generateDefenses() {
   if (!strategies.length) { alert('Select at least one strategy.'); return; }
   showGenStatus('info', 'Generating defenses…');
   try {
-    const d = await api('/api/payloads/generate-defenses', {
-      method: 'POST', body: { strategies, levers, count }
-    });
+    const body = { strategies, levers, count };
+    const tok = geminiToken();
+    if (tok) body.gemini_api_key = tok;
+    const d = await api('/api/payloads/generate-defenses', { method: 'POST', body });
     showGenStatus('success', `Generated ${d.defenses?.length || 0} defenses. Check Custom Prompts tab.`);
   } catch(e) { showGenStatus('error', e.message); }
 }

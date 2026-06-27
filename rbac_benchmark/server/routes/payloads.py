@@ -1,12 +1,31 @@
 """payloads.py — injection/defense generation API"""
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from rbac_benchmark.paths import data_path
+
+
+@contextlib.contextmanager
+def _gemini_key(token: str | None):
+    """Temporarily override GEMINI_API_KEY for the duration of a generation call."""
+    if not token:
+        yield
+        return
+    prev = os.environ.get("GEMINI_API_KEY")
+    os.environ["GEMINI_API_KEY"] = token
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = prev
 
 router = APIRouter()
 
@@ -43,11 +62,13 @@ async def generate_injections(body: dict):
     severities = body.get("severities", [1, 2, 3])
     count      = int(body.get("count", 5))
     context    = body.get("context", "")
+    token      = body.get("gemini_api_key", "").strip() or None
 
     try:
         from rbac_benchmark.generation.injection_generator import generate_injections as _gen
-        injections = _gen(levers=levers, severities=severities, count=count, context=context)
         import datetime
+        with _gemini_key(token):
+            injections = _gen(levers=levers, severities=severities, count=count, context=context)
         output = {"injections": injections, "generated_at": datetime.datetime.now().isoformat()}
         Path(_INJECTIONS_FILE).write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
         return output
@@ -63,10 +84,12 @@ async def generate_defenses(body: dict):
     strategies = body.get("strategies", [])
     levers     = body.get("levers", [])
     count      = int(body.get("count", 3))
+    token      = body.get("gemini_api_key", "").strip() or None
 
     try:
         from rbac_benchmark.generation.defense_generator import generate_defenses as _gen
-        defenses = _gen(strategies=strategies, levers=levers, count=count)
+        with _gemini_key(token):
+            defenses = _gen(strategies=strategies, levers=levers, count=count)
         # Merge into custom_prompts.json
         existing = _load_json(_PROMPTS_FILE) or {}
         for d in defenses:
