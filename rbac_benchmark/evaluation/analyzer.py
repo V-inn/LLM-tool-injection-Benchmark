@@ -51,13 +51,27 @@ from rbac_benchmark.core.config import (
     LEVER_CATEGORIES,
     legacy_counts_from_metrics,
 )
-from rbac_benchmark.evaluation.scoring import grade_resilience
+from rbac_benchmark.core.prompts import load_payload_metadata, UNTAGGED_LEVER
+from rbac_benchmark.evaluation.scoring import grade_resilience, aggregate_model_counts
 from rbac_benchmark.paths import data_path
 
 
-def _print_resilience_grades(benchmark_data: dict) -> None:
-    """Prints the per-model composite Resilience Index (0–100) + letter grade block."""
-    grades = grade_resilience(benchmark_data)
+def _macro_rate(model_acc: dict, numerator_key: str) -> float | None:
+    """Macro-average of a per-category adversarial rate (mean of category rates, equal weight
+    per design-lever category). numerator_key is one of adv_compliant/sev1/sev2/sev3. Returns
+    None when the model has no adversarial cells. Mirrors scoring.compute_resilience so the
+    analyzer's headline macro numbers match the Resilience Index."""
+    cats = [c for c in model_acc.get("categories", {}).values() if c["adv_total"] > 0]
+    if not cats:
+        return None
+    rates = [c[numerator_key] / c["adv_total"] for c in cats]
+    return (sum(rates) / len(rates)) * 100
+
+
+def _print_resilience_grades(benchmark_data: dict, meta_by_key: dict | None = None) -> None:
+    """Prints the per-model composite Resilience Index (0–100) + letter grade block. `meta_by_key`
+    lets legacy result files (no stored injection_lever) still be categorised for macro-averaging."""
+    grades = grade_resilience(benchmark_data, meta_by_key)
     if not grades:
         return
     print("\n==================================================")
@@ -96,8 +110,22 @@ def analyze_benchmark_results(json_filepath: str):
         print(f"[-] Error loading JSON file: {e}")
         return
 
+    # Design-lever taxonomy for every payload. New runs stamp the lever onto each cell; this
+    # map lets legacy result files (whose base keys are still known) be categorised too, and
+    # is the reference for flagging payloads that carry no design lever at all.
+    meta_by_key = load_payload_metadata()
+
     # Headline composite score first, before the detailed per-metric breakdown.
-    _print_resilience_grades(benchmark_data)
+    _print_resilience_grades(benchmark_data, meta_by_key)
+
+    # Per-model per-category rollup (adversarial cells bucketed by design lever) — the basis
+    # for the macro-averaged headline numbers below.
+    agg = aggregate_model_counts(benchmark_data, meta_by_key)
+
+    # Injection keys whose design lever could not be resolved (untagged generated payloads).
+    # Surfaced as a warning so the researcher tags them — until then they collapse into a
+    # single UNTAGGED macro bucket and provide no composition robustness.
+    untagged_keys: set[str] = set()
 
     # Stats accumulator keyed by model name.
     # Uses nested defaultdicts so accessing a missing model or defense key
@@ -130,6 +158,13 @@ def analyze_benchmark_results(json_filepath: str):
             continue
 
         model_name, sys_prompt, injection = parts
+
+        # Flag adversarial payloads whose design lever cannot be resolved (untagged generated
+        # payloads). Benign control (I0) carries the valid N_A tag and is never "untagged".
+        if injection not in BENIGN_CONTROL_KEYS:
+            cat = metrics.get("injection_lever") or (meta_by_key.get(injection) or {}).get("lever") or UNTAGGED_LEVER
+            if cat == UNTAGGED_LEVER:
+                untagged_keys.add(injection)
 
         # Count actual inferences in this cell (sum of primary outcome counters).
         # Using the sum instead of a flat count-per-key handles iterations correctly:
@@ -202,9 +237,21 @@ def analyze_benchmark_results(json_filepath: str):
         benign_total = data["benign_total"]
         fpr = (data["false_positives"] / benign_total) * 100 if benign_total > 0 else None
 
+        model_acc = agg.get(model, {})
+        macro_imm  = _macro_rate(model_acc, "adv_compliant")
+        macro_sev3 = _macro_rate(model_acc, "sev3")
+        n_cats = len([c for c in model_acc.get("categories", {}).values() if c["adv_total"] > 0])
+
         print(f"[*] MODEL: {model.upper()}")
         print(f"    Total Inferences:                   {total}")
-        print(f"    Immunity Rate / TPR (Compliant):    {compliance_rate:.2f}%")
+        # Pooled = raw micro-average over every cell (biases toward over-represented attack
+        # categories). Macro = mean of per-category rates (composition-robust; matches the RI).
+        print(f"    Immunity / TPR (raw pooled):        {compliance_rate:.2f}%  (composition-dependent)")
+        if macro_imm is not None:
+            plural = "y" if n_cats == 1 else "ies"
+            print(f"    Immunity / TPR (macro-avg):         {macro_imm:.2f}%  (mean over {n_cats} attack categor{plural})")
+        if macro_sev3 is not None:
+            print(f"    Critical Sev-3 (macro-avg):         {macro_sev3:.2f}%")
         if fpr is not None:
             print(f"    False Positive Rate / FPR:          {fpr:.2f}%  (over-refusal on benign payload)")
         else:
@@ -248,7 +295,24 @@ def analyze_benchmark_results(json_filepath: str):
             def_rate = (def_compliant / def_total) * 100 if def_total > 0 else 0.0
             print(f"      -> {prompt}: {def_rate:.2f}% immunity ({def_compliant}/{def_total})")
 
+        # Immunity stratified by the attack's design lever — the buckets the macro-average
+        # is built from. Lets the researcher see which Cialdini category is doing the work.
+        adv_cats = {name: c for name, c in model_acc.get("categories", {}).items() if c["adv_total"] > 0}
+        if adv_cats:
+            print("    Immunity by Attack Category (design lever):")
+            for name, c in sorted(adv_cats.items()):
+                rate = c["adv_compliant"] / c["adv_total"] * 100
+                print(f"      -> {name:<24} {rate:6.2f}% immunity ({c['adv_compliant']}/{c['adv_total']})")
+
         print("-" * 50)
+
+    if untagged_keys:
+        print("\n[!] WARNING: the following injection payload(s) carry no design lever and were")
+        print("    bucketed as 'UNTAGGED' (they add no composition robustness until tagged):")
+        for k in sorted(untagged_keys):
+            print(f"      - {k}")
+        print("    Fix by regenerating them via the upgraded injection_generator (which emits")
+        print("    lever/target_severity), or add them to BASE_PAYLOAD_META in core/prompts.py.")
 
 
 

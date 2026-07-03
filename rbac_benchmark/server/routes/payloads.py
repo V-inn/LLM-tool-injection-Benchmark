@@ -44,6 +44,17 @@ def _load_json(path: str) -> dict | list | None:
         return None
 
 
+def _payload_row(key: str, value) -> dict:
+    """Render one injection payload for the UI, tolerating BOTH the legacy bare-string
+    schema and the tagged {text, lever, target_severity} schema written by the upgraded
+    generator. Surfaces the design lever/severity so the dashboard can show/filter them."""
+    if isinstance(value, dict):
+        text = value.get("text", "")
+        return {"key": key, "text": text, "prompt": text,
+                "lever": value.get("lever"), "target_severity": value.get("target_severity")}
+    return {"key": key, "text": value, "prompt": value}
+
+
 # ── GET /api/payloads/injections ──────────────────────────────────────────────
 @router.get("/injections")
 def list_injections():
@@ -51,8 +62,9 @@ def list_injections():
     if raw is None:
         return {"injections": [], "generated_at": None}
     if isinstance(raw, dict) and "injections" not in raw:
-        # generator writes plain {key: payload_text} dict
-        items = [{"key": k, "text": v, "prompt": v} for k, v in raw.items()]
+        # generator writes a plain {key: payload} dict — payload is a bare string (legacy)
+        # or a {text, lever, target_severity} object (tagged schema).
+        items = [_payload_row(k, v) for k, v in raw.items()]
         generated_at = None
     elif isinstance(raw, dict):
         items = raw.get("injections", [])
@@ -91,7 +103,7 @@ async def generate_injections(body: dict):
             )
         raw = _load_json(_INJECTIONS_FILE)
         if isinstance(raw, dict) and "injections" not in raw:
-            injections = [{"key": k, "text": v, "prompt": v} for k, v in raw.items()]
+            injections = [_payload_row(k, v) for k, v in raw.items()]
         else:
             injections = (raw or {}).get("injections", raw) if isinstance(raw, dict) else (raw or [])
         return {"injections": injections, "generated_at": datetime.datetime.now().isoformat()}

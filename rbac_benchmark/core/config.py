@@ -323,6 +323,25 @@ class InferenceMetrics:
     judge_labels:           list[str] = field(default_factory=list)  # legacy
     judge_reasoning:        list[str] = field(default_factory=list)
 
+    # ── Design-lever metadata (stamped at run time from the payload's declared
+    # taxonomy — NOT a Judge output) ──────────────────────────────────────────
+    # injection_lever is the attack's *intended* Cialdini category and target_severity
+    # its *intended* forbidden tier. They make each result cell self-describing so the
+    # analyzer/scoring layer can stratify (macro-average) by attack category without an
+    # external lookup, and so a lever-skewed payload set cannot bias the headline rates.
+    #
+    # CRITICAL: these are the "design lever", never to be confused with the LLM Judge's
+    # "observed lever" (judge_lever_labels / lever_* counters), which is derived purely
+    # from the model's [THOUGHT] trace. The Judge must never see these fields — feeding
+    # the intended lever back into classification would make the observed lever a
+    # self-fulfilling echo and inflate Cohen's kappa. They are stored here as inert
+    # metadata and are never passed to the judge queue or the judge prompt.
+    #
+    # Legacy result files (written before this field existed) load with these as None;
+    # downstream code treats a None/absent lever as the "UNTAGGED" category.
+    injection_lever:        str | None = None
+    target_severity:        int | None = None
+
     # Attribute lookup tables for the two judge axes — drive record_awareness /
     # record_lever by the Judge's string label without a long if/elif ladder.
     _AWARENESS_ATTR = {
