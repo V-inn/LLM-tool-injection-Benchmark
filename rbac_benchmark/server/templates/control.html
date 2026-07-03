@@ -186,25 +186,47 @@ let _total = 0;
 let _thoughts = [];
 let _thoughtIdx = 0;
 let _startTs = null;
+let _lastMatrix = null;  // most recent "model | defense | attack" key seen in the log
+
+// Model checkbox selection is persisted separately from the generic form-state
+// layer in app.js because these boxes are created asynchronously and carry no
+// stable `id` (only name="models" value="<model>"), which app.js keys on.
+const MODELS_KEY = 'rbac:' + location.pathname + ':models';
+
+function persistModels() {
+  const sel = [...document.querySelectorAll('input[name="models"]:checked')].map(e => e.value);
+  try { localStorage.setItem(MODELS_KEY, JSON.stringify(sel)); } catch (_) {}
+}
 
 // Load models on page load
 (async () => {
   const d = await api('/api/system/models').catch(() => ({models:[],online:false}));
   const models = d.models;
 
+  let savedModels = null;
+  try { savedModels = JSON.parse(localStorage.getItem(MODELS_KEY) || 'null'); } catch (_) {}
+
   const checkboxes = document.getElementById('model-checkboxes');
   if (models.length === 0) {
     checkboxes.innerHTML = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">No local models found (Ollama offline?)</span>';
   } else {
-    checkboxes.innerHTML = models.map((m, i) => `
-      <label><input type="checkbox" name="models" value="${m}" ${i < 2 ? 'checked' : ''}><span>${m}</span></label>
-    `).join('');
+    // Restore the previously-checked set if we have one; otherwise default to the
+    // first two models. Stale saved entries (models no longer installed) are ignored.
+    checkboxes.innerHTML = models.map((m, i) => {
+      const checked = savedModels ? savedModels.includes(m) : (i < 2);
+      return `<label><input type="checkbox" name="models" value="${m}" ${checked ? 'checked' : ''}><span>${m}</span></label>`;
+    }).join('');
+    checkboxes.addEventListener('change', persistModels);
   }
 
   ['judge-model','ref-model'].forEach(id => {
     const sel = document.getElementById(id);
     sel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
   });
+
+  // Re-apply saved <select> values now that the options exist — the app.js
+  // DOMContentLoaded restore ran before this async populate, so it couldn't.
+  if (window.__restoreFormState) window.__restoreFormState();
 
   // Load thoughts from existing results
   loadThoughts();
@@ -238,7 +260,22 @@ function updateThoughtInspector() {
 }
 
 function navThought(dir) {
-  _thoughtIdx = Math.max(0, Math.min(_thoughtIdx - dir, _thoughts.length - 1));
+  // dir: -1 = Older (earlier in the chronological array), +1 = Newer.
+  _thoughtIdx = Math.max(0, Math.min(_thoughtIdx + dir, _thoughts.length - 1));
+  updateThoughtInspector();
+}
+
+// Append a thought captured live from the SSE stream and jump the inspector to it.
+function pushLiveThought(text) {
+  const parts = (_lastMatrix || '').split(' | ');
+  _thoughts.push({
+    model:     parts[0] || '—',
+    defense:   parts[1] || '—',
+    text,
+    awareness: null,   // Axis-A label is assigned later by the Judge phase
+    lever:     null,
+  });
+  _thoughtIdx = _thoughts.length - 1;
   updateThoughtInspector();
 }
 
@@ -267,13 +304,16 @@ function getConfig() {
 }
 
 async function handleRunBtn() {
-  if (_runId) return;
+  // While a run is active the button is relabelled "■ Stop" — make it actually
+  // stop instead of no-op'ing (the previous `return` left the label lying).
+  if (_runId) { handleAbort(); return; }
   const config = getConfig();
   if (!config.models.length) { alert('Select at least one model.'); return; }
   try {
     const d = await api('/api/run/start', { method: 'POST', body: config });
     _runId = d.run_id;
     _outcomes = {}; _completed = 0; _total = d.total_inferences || 0;
+    _thoughts = []; _thoughtIdx = 0; _lastMatrix = null;
     _startTs = Date.now();
     setRunning(true);
     openStream(_runId);
@@ -314,8 +354,10 @@ function openStream(runId) {
       const msg = JSON.parse(e.data);
       if (msg.type === 'log') {
         appendLog(msg.line);
+        parseTotal(msg.line);
         parseOutcome(msg.line);
         parseSev3(msg.line);
+        parseThought(msg.line);
         parseProgress(msg.line);
       }
     } catch { appendLog(e.data); }
@@ -340,15 +382,30 @@ function appendLog(line) {
   container.scrollTop = container.scrollHeight;
 }
 
+function parseTotal(line) {
+  // The master logs "... Dispatching <N> inferences..." once the task queue is
+  // built. start_run cannot know the matrix size, so we learn the denominator here.
+  const m = line.match(/Dispatching\s+(\d+)\s+inferences/i);
+  if (m) _total = parseInt(m[1], 10);
+}
+
 function parseOutcome(line) {
+  // "[worker] Completed test: <model> | <defense> | <attack> -> <outcome>"
+  const km = line.match(/Completed test:\s*(.+?)\s*(?:\(INFRA_ERROR\)\s*)?-> /);
+  if (km) _lastMatrix = km[1];
   const m = line.match(/-> (\S+)\s*$/);
-  if (!m) return;
+  if (!m || !/Completed test:/.test(line)) return;
   const outcome = m[1];
   _outcomes[outcome] = (_outcomes[outcome] || 0) + 1;
   _completed++;
   updateStats();
   document.getElementById('donut-wrap').style.display = '';
   renderDonut('outcome-donut', _outcomes);
+}
+
+function parseThought(line) {
+  const m = line.match(/\[THOUGHT\]:\s*(.*)$/);
+  if (m) pushLiveThought(m[1]);
 }
 
 function parseSev3(line) {
@@ -367,10 +424,14 @@ function parseProgress(line) {
 
 function updateStats() {
   document.getElementById('stat-inferences').textContent = _completed.toLocaleString();
-  const immune = _outcomes['compliant'] || _outcomes['ROBUST_REFUSAL'] || 0;
+  // "Immune" = the model resisted the injection (Outcome.COMPLIANT). The log now
+  // emits the enum *value* ("compliant"), matching this key and the donut colours.
+  const immune = _outcomes['compliant'] || 0;
   document.getElementById('stat-tpr').textContent = _completed ? Math.round(immune / _completed * 100) + '%' : '—';
   const elapsed = (Date.now() - _startTs) / 1000;
-  document.getElementById('stat-rate').textContent = elapsed > 0 ? (~Math.round(_completed / elapsed)) + '/s' : '—';
+  // NB: the previous code wrote `~Math.round(...)` — bitwise NOT — which turned a
+  // rate of 0 into -1 ("-1/s"). Plain rounding is what was intended.
+  document.getElementById('stat-rate').textContent = elapsed > 0 ? Math.round(_completed / elapsed) + '/s' : '—';
 }
 
 function setRunning(yes) {

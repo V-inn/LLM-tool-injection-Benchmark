@@ -212,7 +212,7 @@ def _wait_http(port: int, timeout: float = 40.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"http://localhost:{port}/healthz", timeout=2) as r:
+            with urllib.request.urlopen(f"http://localhost:{port}/api/docs", timeout=2) as r:
                 if r.status == 200:
                     return True
         except Exception:
@@ -260,12 +260,9 @@ def cmd_shot(args) -> int:
         WebDriverWait(driver, 40).until(EC.presence_of_element_located(
             (By.XPATH, "//*[contains(text(),'RBAC Resilience Benchmark') or contains(text(),'LLM Red Team Benchmark')]")))
 
-        if args.tab:
-            el = WebDriverWait(driver, 20).until(EC.element_to_be_clickable(
-                (By.XPATH, f"//button[@role='tab']//*[contains(text(),'{args.tab}')]")))
-            driver.execute_script("arguments[0].scrollIntoView(true);", el)
-            el.click()
-            time.sleep(5)  # let the clicked tab (Plotly charts) finish painting
+        if args.page:
+            driver.get(f"http://localhost:{args.port}/{args.page}")
+            time.sleep(3)  # let page and any deferred JS finish painting
         else:
             time.sleep(3)
 
@@ -293,11 +290,11 @@ def main() -> int:
     sp_seed = sub.add_parser("seed", help="Write synthetic data/benchmark_results.json + kappa_samples.json.")
     sp_seed.add_argument("--out", default=None)
 
-    sp_shot = sub.add_parser("shot", help="Launch Streamlit + Firefox screenshot a tab.")
-    sp_shot.add_argument("--tab", default=None,
-                         help='Tab text to click before shooting, e.g. "Dashboard".')
+    sp_shot = sub.add_parser("shot", help="Launch FastAPI/uvicorn + Firefox screenshot a page.")
+    sp_shot.add_argument("--page", default=None,
+                         help='Page route to navigate to before shooting, e.g. "dashboard".')
     sp_shot.add_argument("--out", default=None, help="Screenshot output path.")
-    sp_shot.add_argument("--port", type=int, default=8501)
+    sp_shot.add_argument("--port", type=int, default=8000)
     sp_shot.add_argument("--no-seed", action="store_true",
                          help="Do not overwrite data/benchmark_results.json.")
 

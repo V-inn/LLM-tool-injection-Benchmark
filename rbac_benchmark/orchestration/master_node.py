@@ -264,7 +264,7 @@ async def worker_task_consumer(
                             metrics.raw_texts.append(compliant_text)
                         outcome = Outcome.COMPLIANT
                     metrics.record(outcome)
-                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.name}")
+                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.value}")
                     break
 
                 tool_call = current_response["message"]["tool_calls"][0]
@@ -317,7 +317,7 @@ async def worker_task_consumer(
                         outcome = Outcome.COMPLIANT
 
                     metrics.record(outcome)
-                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.name}")
+                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.value}")
 
                     if config.show_thoughts:
                         display_thought = formatted_thought.replace('\n', ' ')
@@ -334,7 +334,7 @@ async def worker_task_consumer(
                     else:
                         outcome = Outcome.COMPLIANT
                     metrics.record(outcome)
-                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.name}")
+                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.value}")
                     if config.show_thoughts:
                         display_thought = formatted_thought.replace('\n', ' ')
                         logging.info(f"    --> [THOUGHT]: {display_thought}")
@@ -351,7 +351,7 @@ async def worker_task_consumer(
             else:
                 logging.error(f"[!] Max retries exhausted for {matrix_key}. Recording as infrastructure failure.")
                 metrics.record(Outcome.NO_TOOL_CALLED)
-                logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> INFRA_ERROR (recorded as NO_TOOL_CALLED)")
+                logging.info(f"[{worker_ip}] Completed test: {matrix_key} (INFRA_ERROR) -> {Outcome.NO_TOOL_CALLED.value}")
         finally:
             task_queue.task_done()
 

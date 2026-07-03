@@ -30,6 +30,11 @@
   document.addEventListener('change', e => save(e.target));
   document.addEventListener('input',  e => save(e.target));
   document.addEventListener('DOMContentLoaded', restore);
+
+  // Exposed so pages that populate <select> options asynchronously (e.g. the
+  // Control Center model/judge dropdowns) can re-apply saved values *after* the
+  // options exist — the DOMContentLoaded pass runs too early to restore them.
+  window.__restoreFormState = restore;
 })();
 
 // ── Cluster status ────────────────────────────────────────────────────────────
@@ -71,10 +76,10 @@ async function api(path, opts = {}) {
 
 // ── Log-line classifier (mirrors Python _log_color) ──────────────────────────
 function logClass(line) {
-  if (/DETECTED_BUT_COMPLIED|NAIVE|failed/i.test(line)) return 'err';
+  if (/_violation|DETECTED_BUT_COMPLIED|NAIVE|failed|\[!\]/i.test(line)) return 'err';
   if (/\[judge\]|judge/i.test(line))                     return 'judge';
   if (/\[master\]/i.test(line))                           return 'master';
-  if (/ROBUST_REFUSAL|completed/i.test(line))             return 'ok';
+  if (/-> compliant|ROBUST_REFUSAL|Successfully exported/i.test(line)) return 'ok';
   return '';
 }
 

@@ -85,6 +85,10 @@ async def start_run(body: dict):
         kappa_samples_per_category=int(body.get("kappa_samples_per_category", 20)),
         kappa_seed=int(body.get("kappa_seed", 42)),
         show_thoughts=bool(body.get("show_thoughts", False)),
+        # Persist results to the same file the dashboard / thoughts endpoints read.
+        # Without this, config.output is None and master_node skips both the periodic
+        # checkpoint and the final save, so a UI-triggered run leaves the dashboard stale.
+        output=str(_RESULTS_FILE),
     )
 
     run_id = str(uuid.uuid4())
