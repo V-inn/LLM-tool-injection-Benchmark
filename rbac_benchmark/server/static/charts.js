@@ -88,10 +88,10 @@ function renderDonut(canvasId, outcomes) {
   });
 }
 
-// ── ΔTPR Heatmap (using a custom grid, not Chart.js) ─────────────────────────
+// ── ΔImmunity Heatmap (using a custom grid, not Chart.js) ────────────────────
 function renderDeltaHeatmap(container, deltaData, refModel) {
   if (!deltaData || !Object.keys(deltaData).length) {
-    container.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:11px">No ΔTPR data for ' + refModel + '</p>';
+    container.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:11px">No ΔImmunity data for ' + refModel + '</p>';
     return;
   }
   const attacks  = Object.keys(deltaData).sort();

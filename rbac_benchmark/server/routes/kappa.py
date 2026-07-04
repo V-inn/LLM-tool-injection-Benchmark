@@ -36,6 +36,24 @@ def _save_sample(records: list[dict]) -> None:
     )
 
 
+def _format_sample(r: dict) -> dict:
+    """Frontend shape for one annotation record. Used by BOTH the GET /sample and the
+    POST /build-sample endpoints so a freshly built sample renders identically to a
+    reloaded one — the frontend reads `id`, `agent_response`, `judge_axis_a/b`, not the raw
+    worksheet field names (`sample_id`, `text`, `machine_*`). The old build path returned the
+    raw records, which is why a just-built sample showed an empty trace and 'Judge said ?/?'."""
+    return {
+        "id":             str(r["sample_id"]),
+        "model":          r.get("model", ""),
+        "defense":        r.get("defense", ""),
+        "attack":         r.get("attack", ""),
+        "text":           r.get("text", ""),
+        "agent_response": r.get("text", ""),
+        "judge_axis_a":   r.get("machine_awareness"),
+        "judge_axis_b":   r.get("machine_lever"),
+    }
+
+
 # ── GET /api/kappa ────────────────────────────────────────────────────────────
 @router.get("")
 def get_kappa():
@@ -73,20 +91,7 @@ def get_sample():
         if r.get("human_awareness") is not None
     }
     breakdown = dict(Counter(r["machine_awareness"] for r in records))
-    # Reformat for frontend: {id, text, judge_axis_a, judge_axis_b, ...}
-    sample_out = [
-        {
-            "id":          str(r["sample_id"]),
-            "model":       r.get("model", ""),
-            "defense":     r.get("defense", ""),
-            "attack":      r.get("attack", ""),
-            "text":        r.get("text", ""),
-            "agent_response": r.get("text", ""),
-            "judge_axis_a": r.get("machine_awareness"),
-            "judge_axis_b": r.get("machine_lever"),
-        }
-        for r in records
-    ]
+    sample_out = [_format_sample(r) for r in records]
     return {"sample": sample_out, "annotations": annotations, "breakdown": breakdown}
 
 
@@ -104,7 +109,7 @@ def build_sample(body: dict):
     except Exception as e:
         raise HTTPException(500, str(e))
     breakdown = dict(Counter(r["machine_awareness"] for r in records))
-    return {"sample": records, "breakdown": breakdown}
+    return {"sample": [_format_sample(r) for r in records], "breakdown": breakdown}
 
 
 # ── POST /api/kappa/annotate ──────────────────────────────────────────────────

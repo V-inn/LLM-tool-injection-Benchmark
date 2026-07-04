@@ -408,7 +408,9 @@ input[type="checkbox"] { accent-color: var(--signal); width: 15px; height: 15px;
   background: #15150F; border-radius: 9px; padding: 13px 15px;
   font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7;
   color: #D8D8CE; margin-bottom: 11px;
-  max-height: 180px; overflow-y: auto;
+  /* Fixed height (not max-height) so the panel never grows/shrinks with trace length —
+     that resizing was shifting the Older/Newer buttons out from under a rapid clicker. */
+  height: 180px; overflow-y: auto;
 }
 .thought-axis { display: flex; align-items: center; gap: 8px; }
 .thought-axis-label { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }

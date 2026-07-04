@@ -1,6 +1,6 @@
 ---
 name: run-rbac-benchmark
-description: Build, launch, screenshot, and drive the Tool-Calling RBAC Resilience Benchmark (FastAPI "LLM Red Team Benchmark" web UI, the master orchestrator, the worker daemon, and the analyzer metrics modules). Use when asked to run, start, serve, build, test, smoke-test, or screenshot this benchmark / dashboard / FastAPI app, or to verify a change to the metrics (TPR/FPR/delta-TPR), the config, the worker, or the UI.
+description: Build, launch, screenshot, and drive the Tool-Calling RBAC Resilience Benchmark (FastAPI "LLM Red Team Benchmark" web UI, the master orchestrator, the worker daemon, and the analyzer metrics modules). Use when asked to run, start, serve, build, test, smoke-test, or screenshot this benchmark / dashboard / FastAPI app, or to verify a change to the metrics (Immunity/FPR/ΔImmunity), the config, the worker, or the UI.
 ---
 
 # Run the Tool-Calling RBAC Resilience Benchmark
@@ -11,7 +11,7 @@ under tool-output prompt injection. The code is an installable package,
 `orchestration`, `worker`, `server`). Runnable surfaces:
 
 - **Internal metrics modules** (`rbac_benchmark/core/config.py`,
-  `rbac_benchmark/evaluation/`) — TPR / FPR / delta-TPR / attack-strength /
+  `rbac_benchmark/evaluation/`) — Immunity / FPR / ΔImmunity / attack-strength /
   Cohen's κ. **Most PRs touch this layer.** Covered by `tests/` (pytest).
 - **FastAPI web server** (`rbac_benchmark/server/app.py`) — Jinja2-rendered HTML
   pages at `/control`, `/dashboard`, `/payload`, `/prompts`, `/kappa`; all data
@@ -63,8 +63,8 @@ One driver, four subcommands. Run from the repo root.
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py smoke
 ```
 
-Runs `pytest -q` (the `tests/` suite: `InferenceMetrics` accounting, TPR/FPR,
-delta-TPR, attack-strength, Cohen's κ known-value + degenerate cases, and the
+Runs `pytest -q` (the `tests/` suite: `InferenceMetrics` accounting, Immunity/FPR,
+ΔImmunity, attack-strength, Cohen's κ known-value + degenerate cases, and the
 Phase-3 stored-label extraction). Ends with `SMOKE OK`. This is the fastest way to
 verify a change to the metrics math. (`.venv/Scripts/python.exe -m pytest -q` works
 directly too.)
@@ -129,8 +129,8 @@ The analyzer and kappa modules are standalone CLIs (entry points after
 `pip install -e .`; the `python -m` form works without install too):
 
 ```bash
-rbac-analyze data/benchmark_results.json                    # aggregate TPR/FPR report
-rbac-analyze data/benchmark_results.json --delta-tpr        # marginal defense gain
+rbac-analyze data/benchmark_results.json                    # aggregate Immunity/FPR report
+rbac-analyze data/benchmark_results.json --delta-immunity   # marginal defense gain
 rbac-analyze data/benchmark_results.json --validate-attacks # Phase 2 attack strength
 rbac-kappa   data/kappa_samples.json                        # Phase 3 Cohen's κ (offline)
 # equivalently: .venv/Scripts/python.exe -m rbac_benchmark.evaluation.analyzer ...

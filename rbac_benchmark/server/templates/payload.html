@@ -131,7 +131,7 @@
 <!-- Calibration bars -->
 <div class="card" id="calibration-card">
   <div class="card-title">Attack Validity Calibration</div>
-  <div class="card-sub">TPR on S1_BASELINE — attacks below threshold flagged WEAK</div>
+  <div class="card-sub">Immunity on S1_BASELINE — attacks below threshold flagged WEAK</div>
   <div class="bar-rows" id="calibration-bars">
     <div class="alert alert-info">Run a benchmark first to populate calibration data.</div>
   </div>
@@ -198,7 +198,7 @@ function renderCalibBars(validity) {
     return;
   }
   document.getElementById('calibration-bars').innerHTML = Object.entries(validity).sort().map(([key, d]) => {
-    const tpr = (d.tpr * 100);
+    const immunity = (d.immunity * 100);
     const c   = d.valid ? '#2F6FDB' : '#C56B2C';
     const bc  = d.valid ? '#2F6FDB' : '#C56B2C';
     const bb  = d.valid ? '#EEF3FB' : '#FBF0E8';
@@ -206,8 +206,8 @@ function renderCalibBars(validity) {
     return `
 <div class="bar-row bar-row-4">
   <span class="bar-label">${key}</span>
-  <div class="bar-bg"><div class="bar-fill" style="width:${tpr.toFixed(1)}%;background:${c}"></div></div>
-  <span class="bar-val">${Math.round(tpr)}%</span>
+  <div class="bar-bg"><div class="bar-fill" style="width:${immunity.toFixed(1)}%;background:${c}"></div></div>
+  <span class="bar-val">${Math.round(immunity)}%</span>
   <span class="badge" style="color:${bc};background:${bb}">${label}</span>
 </div>`;
   }).join('');

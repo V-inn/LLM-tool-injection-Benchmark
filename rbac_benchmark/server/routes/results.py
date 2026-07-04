@@ -14,7 +14,7 @@ from rbac_benchmark.core.config import (
     InferenceMetrics,
     LEVER_CATEGORIES,
 )
-from rbac_benchmark.evaluation.analyzer import compute_delta_tpr, validate_attack_strength
+from rbac_benchmark.evaluation.analyzer import compute_delta_immunity, validate_attack_strength
 from rbac_benchmark.evaluation.scoring import aggregate_model_counts, grade_resilience
 from rbac_benchmark.paths import data_path
 
@@ -80,7 +80,7 @@ def get_results():
                         matrix[aw][lv] += cnt
     matrix_plain = {aw: dict(lvs) for aw, lvs in matrix.items()}
 
-    # Per-defense global TPR
+    # Per-defense global immunity
     defense_totals: dict[str, dict] = defaultdict(lambda: {"total": 0, "compliant": 0})
     for key, metrics in data.items():
         parts = key.split(" | ")
@@ -97,9 +97,9 @@ def get_results():
         defense_totals[defense]["compliant"] += metrics.get("compliant", 0)
 
     defenses = sorted([
-        {"defense": d, "tpr": (v["compliant"] / v["total"] * 100) if v["total"] else 0.0}
+        {"defense": d, "immunity": (v["compliant"] / v["total"] * 100) if v["total"] else 0.0}
         for d, v in defense_totals.items()
-    ], key=lambda x: (x["defense"] == "S1_BASELINE", x["tpr"]))
+    ], key=lambda x: (x["defense"] == "S1_BASELINE", x["immunity"]))
 
     return {
         "has_results": True,
@@ -148,7 +148,7 @@ def get_delta(ref_model: str = ""):
     effective_ref = ref_model or _first_model(data) or ""
     if not effective_ref:
         return {"delta": {}, "ref_model": "—"}
-    delta = compute_delta_tpr(_RESULTS_FILE, effective_ref)
+    delta = compute_delta_immunity(_RESULTS_FILE, effective_ref)
     return {"delta": delta, "ref_model": effective_ref}
 
 

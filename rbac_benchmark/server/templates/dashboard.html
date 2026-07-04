@@ -13,7 +13,7 @@
 <!-- KPI strip -->
 <div class="kpi-strip">
   <div class="kpi"><div class="kpi-label">Total Inferences</div><div class="kpi-value" id="kpi-total">—</div></div>
-  <div class="kpi"><div class="kpi-label">Global Immunity (TPR)</div><div class="kpi-value" id="kpi-tpr">—</div></div>
+  <div class="kpi"><div class="kpi-label">Global Immunity</div><div class="kpi-value" id="kpi-immunity">—</div></div>
   <div class="kpi"><div class="kpi-label">Over-Refusal (FPR)</div><div class="kpi-value" id="kpi-fpr">—</div></div>
   <div class="kpi"><div class="kpi-label">Critical Failures</div><div class="kpi-value" id="kpi-sev3" style="color:#C0392B">—</div></div>
   <div class="kpi"><div class="kpi-label">Mean Resilience Index</div><div class="kpi-value" id="kpi-ri">—</div></div>
@@ -50,7 +50,7 @@
   </div>
   <div class="card">
     <div class="card-title">Defense Performance Analysis</div>
-    <div class="card-sub">global immunity rate (TPR) averaged across all models</div>
+    <div class="card-sub">global immunity rate averaged across all models</div>
     <div class="bar-rows" id="defense-bars"></div>
   </div>
 </div>
@@ -60,16 +60,16 @@
 <!-- Attack validity -->
 <div class="card">
   <div class="card-title">Phase 2 — Attack Validity Check</div>
-  <div class="card-sub" id="validity-sub">TPR on S1_BASELINE · ref model: —</div>
+  <div class="card-sub" id="validity-sub">Immunity on S1_BASELINE · ref model: —</div>
   <div class="bar-rows" id="validity-bars"></div>
 </div>
 
 <hr class="divider"/>
 
-<!-- ΔTPR heatmap -->
+<!-- ΔImmunity heatmap -->
 <div class="card">
-  <div class="card-title">Phase 2 — ΔTPR Marginal Defense Gain</div>
-  <div class="card-sub">ΔTPR = TPR(advanced defense) − TPR(S1_BASELINE)</div>
+  <div class="card-title">Phase 2 — ΔImmunity Marginal Defense Gain</div>
+  <div class="card-sub">ΔImmunity = Immunity(advanced defense) − Immunity(S1_BASELINE)</div>
   <div id="delta-heatmap"></div>
 </div>
 {% endblock %}
@@ -100,7 +100,7 @@
     // KPIs
     const s = summ.summary;
     document.getElementById('kpi-total').textContent = s.total_inferences.toLocaleString();
-    document.getElementById('kpi-tpr').textContent   = s.global_immunity_pct.toFixed(1) + '%';
+    document.getElementById('kpi-immunity').textContent   = s.global_immunity_pct.toFixed(1) + '%';
     document.getElementById('kpi-fpr').textContent   = s.global_fpr_pct != null ? s.global_fpr_pct.toFixed(1) + '%' : 'N/A';
     document.getElementById('kpi-sev3').textContent  = s.critical_failures;
     document.getElementById('kpi-ri').textContent    = s.mean_ri != null ? s.mean_ri.toFixed(1) : '—';
@@ -122,10 +122,10 @@
 
     // Validity bars
     document.getElementById('validity-sub').textContent =
-      `TPR on S1_BASELINE · ref model: ${validity.ref_model} · threshold ≤ ${Math.round(validity.threshold * 100)}%`;
+      `Immunity on S1_BASELINE · ref model: ${validity.ref_model} · threshold ≤ ${Math.round(validity.threshold * 100)}%`;
     renderValidityBars(document.getElementById('validity-bars'), validity.validity);
 
-    // ΔTPR heatmap
+    // ΔImmunity heatmap
     renderDeltaHeatmap(document.getElementById('delta-heatmap'), delta.delta, delta.ref_model);
 
   } catch(e) {

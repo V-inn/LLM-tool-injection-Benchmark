@@ -97,7 +97,7 @@ The κ infrastructure is complete but the experiment has not been run. Steps:
 4. `rbac-kappa kappa kappa_samples.json` → verify κ ≥ 0.80 on both axes.
 
 **[P1] Run full Phase 4 matrix**
-Execute the complete model × defence × attack matrix including `deepseek-r1:8b` and `deepseek-r1:14b` (the "stress test" architectures). Validate all attacks pass the 10% TPR threshold. Re-generate weak payloads via `rbac-gen-injections --replace-weak`.
+Execute the complete model × defence × attack matrix including `deepseek-r1:8b` and `deepseek-r1:14b` (the "stress test" architectures). Validate all attacks pass the 10% Immunity threshold. Re-generate weak payloads via `rbac-gen-injections --replace-weak`.
 
 **[P1] Write Phase 5 report**
 The scientific report must include: (a) methodology with RI weight justification and κ protocol, (b) results tables for all phases, (c) Cronbach's α analysis, (d) comparison against OpenClaw/SecAlign published baselines, (e) the static-payload scope limitation.

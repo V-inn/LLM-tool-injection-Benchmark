@@ -154,7 +154,7 @@ function renderLeaderboard(container, grades) {
     const gc     = GRADE_COLOR[grade] || '#9A9A93';
     const gb     = GRADE_BG[grade]    || '#F4F4F0';
     const sub    = g.subscores || {};
-    const tpr    = sub.immunity != null ? `${Math.round(sub.immunity * 100)}%` : '—';
+    const immunityPct = sub.immunity != null ? `${Math.round(sub.immunity * 100)}%` : '—';
     const fpr    = sub.utility  != null ? `${Math.round((1 - sub.utility) * 100)}%` : '—';
     const honesty= sub.honesty  != null ? `${Math.round(sub.honesty * 100)}%` : '—';
     const sev3c  = hasSev3 ? '#C0392B' : '#B0B0A8';
@@ -174,7 +174,7 @@ function renderLeaderboard(container, grades) {
     <div class="lb-ri-bar-bg"><div class="lb-ri-bar" style="width:${ri}%;background:${gc}"></div></div>
     <span class="lb-ri-val">${ri}</span>
   </div>
-  <span class="lb-metric">${tpr}</span>
+  <span class="lb-metric">${immunityPct}</span>
   <span class="lb-metric">${fpr}</span>
   <span class="lb-metric">${honesty}</span>
   <span class="lb-metric" style="color:${sev3c};font-weight:${sev3w}">${hasSev3 ? '✗' : '0'}</span>
@@ -184,7 +184,7 @@ function renderLeaderboard(container, grades) {
 <div class="lb-header">
   <span></span><span>MODEL</span><span style="text-align:center">GRADE</span>
   <span>RESILIENCE INDEX</span>
-  <span style="text-align:right">TPR</span><span style="text-align:right">FPR</span>
+  <span style="text-align:right">IMMUNITY</span><span style="text-align:right">FPR</span>
   <span style="text-align:right">HONESTY</span><span style="text-align:right">SEV-3</span>
 </div>
 ${rows}
@@ -201,8 +201,8 @@ function renderDefenseBars(container, defenses) {
     return `
 <div class="bar-row bar-row-3">
   <span class="bar-label" style="color:${lc}">${d.defense}</span>
-  <div class="bar-bg"><div class="bar-fill" style="width:${d.tpr.toFixed(1)}%;background:${c}"></div></div>
-  <span class="bar-val" style="color:${lc}">${Math.round(d.tpr)}%</span>
+  <div class="bar-bg"><div class="bar-fill" style="width:${d.immunity.toFixed(1)}%;background:${c}"></div></div>
+  <span class="bar-val" style="color:${lc}">${Math.round(d.immunity)}%</span>
 </div>`;
   }).join('');
 }
@@ -211,7 +211,7 @@ function renderDefenseBars(container, defenses) {
 function renderValidityBars(container, validity) {
   if (!validity || !Object.keys(validity).length) { container.innerHTML = ''; return; }
   container.innerHTML = Object.entries(validity).sort().map(([key, d]) => {
-    const tpr = (d.tpr * 100);
+    const immunity = (d.immunity * 100);
     const c   = d.valid ? '#2F6FDB' : '#C56B2C';
     const bc  = d.valid ? '#2F6FDB' : '#C56B2C';
     const bb  = d.valid ? '#EEF3FB' : '#FBF0E8';
@@ -219,8 +219,8 @@ function renderValidityBars(container, validity) {
     return `
 <div class="bar-row bar-row-4">
   <span class="bar-label">${key}</span>
-  <div class="bar-bg"><div class="bar-fill" style="width:${tpr.toFixed(1)}%;background:${c}"></div></div>
-  <span class="bar-val">${Math.round(tpr)}%</span>
+  <div class="bar-bg"><div class="bar-fill" style="width:${immunity.toFixed(1)}%;background:${c}"></div></div>
+  <span class="bar-val">${Math.round(immunity)}%</span>
   <span class="badge" style="color:${bc};background:${bb}">${bl}</span>
 </div>`;
   }).join('');

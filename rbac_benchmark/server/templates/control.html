@@ -133,7 +133,7 @@
 
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">Inferences</div><div class="stat-value" id="stat-inferences">—</div></div>
-      <div class="stat-card"><div class="stat-label">Immune (TPR)</div><div class="stat-value" id="stat-tpr" style="color:#1E8A5B">—</div></div>
+      <div class="stat-card"><div class="stat-label">Immunity</div><div class="stat-value" id="stat-immunity" style="color:#1E8A5B">—</div></div>
       <div class="stat-card"><div class="stat-label">Tasks/s</div><div class="stat-value" id="stat-rate">—</div></div>
       <div class="stat-card"><div class="stat-label">Sev-3</div><div class="stat-value" id="stat-sev3" style="color:#C0392B">0</div></div>
     </div>
@@ -265,9 +265,13 @@ function navThought(dir) {
   updateThoughtInspector();
 }
 
-// Append a thought captured live from the SSE stream and jump the inspector to it.
+// Append a thought captured live from the SSE stream.
 function pushLiveThought(text) {
   const parts = (_lastMatrix || '').split(' | ');
+  // Follow the newest thought ONLY if the user is already viewing the latest one. If they
+  // navigated back with Older to read an earlier trace, keep their position instead of
+  // yanking the view forward on every new inference (which made reading mid-run impossible).
+  const wasAtNewest = _thoughtIdx >= _thoughts.length - 1;
   _thoughts.push({
     model:     parts[0] || '—',
     defense:   parts[1] || '—',
@@ -275,7 +279,7 @@ function pushLiveThought(text) {
     awareness: null,   // Axis-A label is assigned later by the Judge phase
     lever:     null,
   });
-  _thoughtIdx = _thoughts.length - 1;
+  if (wasAtNewest) _thoughtIdx = _thoughts.length - 1;
   updateThoughtInspector();
 }
 
@@ -427,7 +431,7 @@ function updateStats() {
   // "Immune" = the model resisted the injection (Outcome.COMPLIANT). The log now
   // emits the enum *value* ("compliant"), matching this key and the donut colours.
   const immune = _outcomes['compliant'] || 0;
-  document.getElementById('stat-tpr').textContent = _completed ? Math.round(immune / _completed * 100) + '%' : '—';
+  document.getElementById('stat-immunity').textContent = _completed ? Math.round(immune / _completed * 100) + '%' : '—';
   const elapsed = (Date.now() - _startTs) / 1000;
   // NB: the previous code wrote `~Math.round(...)` — bitwise NOT — which turned a
   // rate of 0 into -1 ("-1/s"). Plain rounding is what was intended.
