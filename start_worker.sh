@@ -23,8 +23,8 @@
 # ============
 # - ollama must be installed and at least one model must be pulled:
 #       ollama pull <model_name>
-# - The rbac_benchmark package must be installed (pip install -e .) so the
-#   rbac-worker entry point is on PATH.
+# - python3 (stdlib only — no pip install needed; the worker listener has no
+#   dependencies of its own).
 # - Port 5005 (UDP, discovery) and 11434 (TCP, Ollama API) must be reachable
 #   from the Master Node on the same LAN.
 #
@@ -39,8 +39,6 @@
 # Do NOT run on untrusted networks. The discovery protocol has no authentication —
 # the Master adds any host that responds to its broadcast to the inference pool.
 # See rbac_benchmark/worker/node.py for a full security note.
-
-export PATH="$HOME/.local/bin:$PATH"
 
 # Resolve the absolute directory of this script so all derived paths are portable.
 # Using $SCRIPT_DIR instead of relative paths means the script works correctly
@@ -63,6 +61,12 @@ fi
 
 echo "[*] Configuring external network access (0.0.0.0)..."
 export OLLAMA_HOST="0.0.0.0"
+
+# Keep at most ONE model resident in memory. The benchmark's shared task queue can
+# hand this node a different model at model boundaries (and on retries), and Ollama's
+# default keeps several models loaded simultaneously — on memory-tight machines that
+# triggers the Linux OOM killer, which takes Ollama down mid-run.
+export OLLAMA_MAX_LOADED_MODELS=1
 
 # ==========================================
 # 1. FELINE SUPERVISOR (optional, background)
@@ -105,5 +109,5 @@ echo "========================================="
 echo ""
 
 # Python stays in the foreground waiting for 'OLLAMA_MASTER_SEEKING' broadcasts.
-# The worker daemon ships in the installed package (pip install -e .).
-rbac-worker
+# Run the listener script directly — it's stdlib-only, so no pip install is needed.
+python3 "$SCRIPT_DIR/rbac_benchmark/worker/node.py"

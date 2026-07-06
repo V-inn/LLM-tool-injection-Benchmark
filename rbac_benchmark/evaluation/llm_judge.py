@@ -74,6 +74,7 @@ class LLMJudge:
         judge_model: str = "qwen3.5:9b",
         host: str = "http://127.0.0.1:11434",
         temperature: float = 0.0,
+        timeout: float = 300.0,
     ):
         self.judge_model = judge_model
         # Temperature is pinned to 0 by default for *reproducibility*: the Judge is a
@@ -85,8 +86,9 @@ class LLMJudge:
         # labels that fed the benchmark. Greedy decoding makes the Judge near-
         # deterministic so its labels are stable and the kappa study is defensible.
         self.temperature = temperature
-        # 60-second timeout prevents a slow judge from blocking the evaluation pipeline.
-        self.client = AsyncClient(host=host, timeout=60.0)
+        # Timeout follows config.request_timeout: a judge model can be just as slow
+        # to cold-load and generate as the target models it evaluates.
+        self.client = AsyncClient(host=host, timeout=timeout)
 
         # The Judge's System prompt defines the two-axis evaluation rubric. Each axis is
         # written to be mutually exclusive and collectively exhaustive — overlapping

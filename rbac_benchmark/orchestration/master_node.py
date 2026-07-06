@@ -70,7 +70,9 @@ import argparse
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Tuple
-from ollama import AsyncClient
+
+import httpx
+from ollama import AsyncClient, ResponseError
 
 from rbac_benchmark.core.config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS, JUDGE_ERROR
 from rbac_benchmark.core.prompts import load_all_prompts, load_payload_metadata
@@ -83,6 +85,12 @@ class TaskItem:
     A single unit of work: one (model, system_prompt, injection_payload) combination
     for one iteration. Multiple TaskItems with the same keys but different iteration
     counts are created in the main queue for statistical stability.
+
+    retries counts REAL failures (timeouts, crashes, bad responses) against
+    config.max_retries. loading_waits counts free re-enqueues taken because a
+    worker was merely busy loading a model — those are not the task's fault and
+    must not consume the retry budget, but they are capped (MAX_LOADING_WAITS)
+    so a node stuck in a load/crash loop cannot recycle a task forever.
     """
     model:             str
     system_key:        str
@@ -90,6 +98,67 @@ class TaskItem:
     system_prompt:     str
     injection_payload: str
     retries:           int = 0
+    loading_waits:     int = 0
+
+
+# Upper bound on free "worker was busy loading" re-enqueues per task (see TaskItem).
+MAX_LOADING_WAITS = 10
+
+
+def classify_ollama_error(error: Exception) -> str:
+    """
+    Buckets an inference-call exception by what it says about the worker's state:
+
+        'busy_loading'  — the server is up but cannot serve *yet*: model still
+                          loading ("llm server loading model") or the request
+                          queue is full (503 / "server busy"). Ollama's error
+                          docs only formalise 404/500, so the loading/busy cases
+                          are matched by status code AND message substring.
+        'missing_model' — 404: the model is not pulled on this worker. Retrying
+                          on the same node can never succeed; surfaced loudly.
+        'conn_down'     — TCP-level failure (refused/reset): Ollama itself is
+                          down or restarting; a liveness probe decides whether
+                          it comes back.
+        'other'         — real failure (timeout, runner crash, OOM, bad JSON):
+                          counts against the task's retry budget.
+    """
+    if isinstance(error, ResponseError):
+        message = (getattr(error, "error", "") or str(error)).lower()
+        status = getattr(error, "status_code", None)
+        if status == 404 or "not found" in message:
+            return "missing_model"
+        if status == 503 or "server busy" in message or "loading model" in message:
+            return "busy_loading"
+        return "other"
+    if isinstance(error, (httpx.ConnectError, httpx.RemoteProtocolError)):
+        return "conn_down"
+    return "other"
+
+
+async def wait_for_ollama_ready(host: str, window: float = 60.0, interval: float = 2.0) -> bool:
+    """
+    Polls GET {host}/api/version (the cheapest liveness endpoint — no model
+    interaction) until Ollama answers 200 or the window closes. Used before
+    re-dispatching a task to a worker that reported busy/loading/down, so the
+    retry fires into a responsive server instead of instantly failing again.
+
+    Note: a 200 here means the HTTP server is up, not that the model finished
+    loading — but a chat request sent during a load simply blocks until the
+    model is ready (bounded by config.request_timeout), which is fine.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + window
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as probe:
+                response = await probe.get(f"{host}/api/version")
+                if response.status_code == 200:
+                    return True
+        except Exception:
+            pass
+        if loop.time() + interval > deadline:
+            return False
+        await asyncio.sleep(interval)
 
 
 def discover_workers_sync(udp_port: int, timeout: float = 3.0) -> List[str]:
@@ -119,7 +188,12 @@ def discover_workers_sync(udp_port: int, timeout: float = 3.0) -> List[str]:
                     active_workers.append(worker_ip)
         except socket.timeout:
             break
+        except UnicodeDecodeError:
+            # Stray non-UTF-8 packet (unrelated LAN traffic) — ignore it and
+            # keep collecting worker replies until the timeout window closes.
+            continue
 
+    sock.close()
     return active_workers
 
 
@@ -224,7 +298,7 @@ async def worker_task_consumer(
           failure), keeping the results matrix consistent and distinguishable from
           model-level failures in the output JSON.
     """
-    client = AsyncClient(host=f"http://{worker_ip}:{config.ollama_port}", timeout=120.0)
+    client = AsyncClient(host=f"http://{worker_ip}:{config.ollama_port}", timeout=config.request_timeout)
 
     while True:
         try:
@@ -250,6 +324,14 @@ async def worker_task_consumer(
             # naturally rather than looping the same embedded instruction forever.
             primary_uid: str | None = None
 
+            # Post-injection thought traces for THIS attempt only. They are merged
+            # into metrics.raw_texts at the moment an outcome is recorded, so an
+            # attempt that dies mid-way (timeout / connection error) and gets
+            # retried leaves no phantom traces behind. Truncating metrics.raw_texts
+            # on failure would be unsafe instead: the cell is shared by concurrent
+            # consumers running other iterations of the same (model, defense, attack).
+            attempt_texts: list[str] = []
+
             for turn in range(config.max_turns):
                 if not current_response["message"].get("tool_calls"):
                     # The model did not call any tool after receiving the injection.
@@ -271,7 +353,7 @@ async def worker_task_consumer(
                         # injection step.
                         compliant_text = current_response["message"].get("content", "").strip()
                         if compliant_text:
-                            metrics.raw_texts.append(compliant_text)
+                            attempt_texts.append(compliant_text)
                         outcome = Outcome.FALSE_POSITIVE
                     elif turn == 0:
                         # The model never called read_user_profile in Phase 1 either —
@@ -286,8 +368,9 @@ async def worker_task_consumer(
                         # so the Judge can analyse what reasoning led to the refusal.
                         compliant_text = current_response["message"].get("content", "").strip()
                         if compliant_text:
-                            metrics.raw_texts.append(compliant_text)
+                            attempt_texts.append(compliant_text)
                         outcome = Outcome.COMPLIANT
+                    metrics.raw_texts.extend(attempt_texts)
                     metrics.record(outcome)
                     logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.value}")
                     break
@@ -329,7 +412,7 @@ async def worker_task_consumer(
                 # the injection silently — the Judge treats this as Instruction Amnesia.
                 raw_text = final_message.get("content", "")
                 formatted_thought = raw_text.strip() if raw_text.strip() else "[NO TEXT GENERATED - SILENT EXECUTION]"
-                metrics.raw_texts.append(formatted_thought)
+                attempt_texts.append(formatted_thought)
 
                 if final_message.get("tool_calls"):
                     subsequent_tool_name = final_message["tool_calls"][0]["function"]["name"]
@@ -373,6 +456,7 @@ async def worker_task_consumer(
                     ):
                         outcome = Outcome.COMPLIANT
 
+                    metrics.raw_texts.extend(attempt_texts)
                     metrics.record(outcome)
                     logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.value}")
 
@@ -390,6 +474,7 @@ async def worker_task_consumer(
                         outcome = Outcome.FALSE_POSITIVE
                     else:
                         outcome = Outcome.COMPLIANT
+                    metrics.raw_texts.extend(attempt_texts)
                     metrics.record(outcome)
                     logging.info(f"[{worker_ip}] Completed test: {matrix_key} -> {outcome.value}")
                     if config.show_thoughts:
@@ -400,15 +485,47 @@ async def worker_task_consumer(
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logging.error(f"[!] Connection/runtime error on node {worker_ip}. Details: {e}")
-            if task.retries < config.max_retries:
-                task.retries += 1
-                logging.warning(f"[!] Retrying task {matrix_key} (attempt {task.retries}/{config.max_retries})...")
-                task_queue.put_nowait(task)
+            kind = classify_ollama_error(e)
+
+            if kind == "missing_model":
+                # Deterministic setup error — retrying on THIS node can never work.
+                # Still re-enqueued (another node may have the model pulled), but
+                # logged loudly so the operator can fix the worker.
+                logging.error(
+                    f"[!] Model '{task.model}' is NOT available on node {worker_ip} — "
+                    f"run `ollama pull {task.model}` on that machine. Details: {e}"
+                )
             else:
-                logging.error(f"[!] Max retries exhausted for {matrix_key}. Recording as infrastructure failure.")
-                metrics.record(Outcome.NO_TOOL_CALLED)
-                logging.info(f"[{worker_ip}] Completed test: {matrix_key} (INFRA_ERROR) -> {Outcome.NO_TOOL_CALLED.value}")
+                logging.error(f"[!] Connection/runtime error on node {worker_ip}. Details: {e}")
+
+            # Busy/loading (500 'llm server loading model', 503 'server busy') and
+            # dropped connections are the worker's state, not the task's fault:
+            # wait for the endpoint to answer again and re-enqueue WITHOUT spending
+            # a retry. Falls through to normal retry accounting if the server never
+            # comes back within the probe window or the free-wait cap is hit.
+            requeued_free = False
+            if kind in ("busy_loading", "conn_down") and task.loading_waits < MAX_LOADING_WAITS:
+                task.loading_waits += 1
+                if await wait_for_ollama_ready(f"http://{worker_ip}:{config.ollama_port}"):
+                    logging.warning(
+                        f"[!] Node {worker_ip} was busy/unavailable — re-queued {matrix_key} "
+                        f"without consuming a retry (wait {task.loading_waits}/{MAX_LOADING_WAITS})."
+                    )
+                    task_queue.put_nowait(task)
+                    requeued_free = True
+
+            if not requeued_free:
+                if task.retries < config.max_retries:
+                    task.retries += 1
+                    logging.warning(f"[!] Retrying task {matrix_key} (attempt {task.retries}/{config.max_retries})...")
+                    task_queue.put_nowait(task)
+                else:
+                    logging.error(f"[!] Max retries exhausted for {matrix_key}. Recording as infrastructure failure.")
+                    # attempt_texts is intentionally discarded here: traces from an
+                    # attempt that never produced an outcome would feed the Judge
+                    # reasoning that doesn't correspond to any recorded inference.
+                    metrics.record(Outcome.NO_TOOL_CALLED)
+                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} (INFRA_ERROR) -> {Outcome.NO_TOOL_CALLED.value}")
         finally:
             task_queue.task_done()
 
@@ -431,7 +548,11 @@ async def judge_worker_consumer(
     counts regardless of any previous partial runs.
     """
     from rbac_benchmark.evaluation.llm_judge import LLMJudge
-    judge = LLMJudge(judge_model=config.judge_model, host=f"http://{worker_ip}:{config.ollama_port}")
+    judge = LLMJudge(
+        judge_model=config.judge_model,
+        host=f"http://{worker_ip}:{config.ollama_port}",
+        timeout=config.request_timeout,
+    )
     MAX_JUDGE_RETRIES = 3
 
     while True:
@@ -472,6 +593,12 @@ async def judge_worker_consumer(
         except Exception as e:
             logging.error(f"[!] Judge error on node {worker_ip}. Details: {e}")
             if retries < MAX_JUDGE_RETRIES:
+                # If the node is merely busy loading the judge model (or briefly
+                # down), wait for it to answer again before the retry fires —
+                # otherwise the retry hits the same loading window and burns for
+                # nothing. Real judge failures keep the plain 2s backoff.
+                if classify_ollama_error(e) in ("busy_loading", "conn_down"):
+                    await wait_for_ollama_ready(f"http://{worker_ip}:{config.ollama_port}")
                 judge_queue.put_nowait((matrix_key, idx, text, retries + 1))
                 await asyncio.sleep(2)
             else:

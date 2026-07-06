@@ -64,8 +64,16 @@ def start_worker():
 
     while True:
         # Block until a UDP packet arrives on the discovery port.
-        data, addr = sock.recvfrom(1024)
-        message = data.decode('utf-8')
+        # Port 5005 overlaps common RTP/media traffic, so stray binary packets
+        # from other LAN hosts are expected — never let one kill the listener.
+        try:
+            data, addr = sock.recvfrom(1024)
+            message = data.decode('utf-8')
+        except UnicodeDecodeError:
+            continue
+        except OSError as recv_error:
+            print(f"[!] Socket error while receiving, ignoring: {recv_error}")
+            continue
 
         master_ip = addr[0]
 
@@ -75,8 +83,14 @@ def start_worker():
 
             # Reply directly to the Master's IP (unicast). The reply must contain
             # exactly "OLLAMA_READY" — the Master checks for this exact string.
+            # A transient network drop (e.g. Wi-Fi renegotiation) raises OSError;
+            # the master will simply retry discovery, so log and keep listening.
             response = "OLLAMA_READY"
-            sock.sendto(response.encode('utf-8'), addr)
+            try:
+                sock.sendto(response.encode('utf-8'), addr)
+            except OSError as send_error:
+                print(f"[!] Failed to reply to {master_ip}, ignoring: {send_error}")
+                continue
 
             # Brief delay to avoid reply packet flooding if the Master sends
             # multiple rapid broadcasts (e.g. during discovery retries).

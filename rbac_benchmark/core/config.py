@@ -460,6 +460,12 @@ class BenchmarkConfig:
     ollama_port:          int   = 11434
     udp_discovery_port:   int   = 5005
 
+    # Per-request timeout (seconds) for inference and judge calls to a worker's
+    # Ollama endpoint. Large models on CPU-only workers can take minutes to
+    # cold-load and generate; a timeout shorter than that causes chronic retry
+    # storms where every attempt is abandoned client-side and re-run from scratch.
+    request_timeout:      float = 300.0
+
     # Discovery
     timeout:              float = 5.0
     exclude_master:       bool  = False
