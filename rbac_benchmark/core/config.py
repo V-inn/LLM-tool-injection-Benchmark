@@ -461,10 +461,16 @@ class BenchmarkConfig:
     udp_discovery_port:   int   = 5005
 
     # Per-request timeout (seconds) for inference and judge calls to a worker's
-    # Ollama endpoint. Large models on CPU-only workers can take minutes to
-    # cold-load and generate; a timeout shorter than that causes chronic retry
-    # storms where every attempt is abandoned client-side and re-run from scratch.
+    # Ollama endpoint. Thanks to the pre-inference warm-up (ensure_model_loaded),
+    # this clock only measures actual generation — model loading is excluded.
     request_timeout:      float = 300.0
+
+    # Timeout (seconds) for the warm-up call that loads a model into memory
+    # before inference. Deliberately separate from request_timeout: a big model
+    # cold-loading from disk on a slow worker can take many minutes, and if the
+    # client disconnects mid-load (Ollama logs a 499) the load is aborted and
+    # the next retry restarts it from scratch — a loop that never converges.
+    model_load_timeout:   float = 1800.0
 
     # Discovery
     timeout:              float = 5.0

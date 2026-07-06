@@ -130,9 +130,31 @@ def classify_ollama_error(error: Exception) -> str:
         if status == 503 or "server busy" in message or "loading model" in message:
             return "busy_loading"
         return "other"
-    if isinstance(error, (httpx.ConnectError, httpx.RemoteProtocolError)):
+    # The ollama client wraps httpx.ConnectError into a builtin ConnectionError
+    # ("Failed to connect to Ollama...") — match both, plus connect timeouts.
+    if isinstance(error, (ConnectionError, httpx.ConnectError,
+                          httpx.ConnectTimeout, httpx.RemoteProtocolError)):
         return "conn_down"
     return "other"
+
+
+async def ensure_model_loaded(host: str, model: str, load_timeout: float) -> None:
+    """
+    Warm-up ping: a chat call with an EMPTY messages array, which the Ollama API
+    documents as "load the model into memory" — no generation happens, and it
+    returns near-instantly when the model is already resident.
+
+    Separating the load from the inference means config.request_timeout only
+    ever measures generation. Without this, a big model's multi-minute cold
+    load ran inside the inference request's clock: the client disconnected at
+    request_timeout (Ollama logs 499, aborts the load), and the retry restarted
+    the load from scratch — a loop that could never converge.
+
+    Raises on failure; callers run it inside the same try/except so load errors
+    flow through the normal classify/retry machinery.
+    """
+    loader = AsyncClient(host=host, timeout=load_timeout)
+    await loader.chat(model=model, messages=[])
 
 
 async def wait_for_ollama_ready(host: str, window: float = 60.0, interval: float = 2.0) -> bool:
@@ -298,7 +320,8 @@ async def worker_task_consumer(
           failure), keeping the results matrix consistent and distinguishable from
           model-level failures in the output JSON.
     """
-    client = AsyncClient(host=f"http://{worker_ip}:{config.ollama_port}", timeout=config.request_timeout)
+    node_host = f"http://{worker_ip}:{config.ollama_port}"
+    client = AsyncClient(host=node_host, timeout=config.request_timeout)
 
     while True:
         try:
@@ -310,6 +333,10 @@ async def worker_task_consumer(
         metrics = results_matrix[matrix_key]
 
         try:
+            # Warm-up first (near-instant if the model is already resident) so the
+            # inference calls below never pay the cold-load inside their own timeout.
+            await ensure_model_loaded(node_host, task.model, config.model_load_timeout)
+
             current_response, messages = await execute_phase_1(client, task.model, task.system_prompt)
 
             # Phase-1 thought traces are intentionally NOT collected for Judge analysis.
@@ -548,12 +575,22 @@ async def judge_worker_consumer(
     counts regardless of any previous partial runs.
     """
     from rbac_benchmark.evaluation.llm_judge import LLMJudge
+    node_host = f"http://{worker_ip}:{config.ollama_port}"
     judge = LLMJudge(
         judge_model=config.judge_model,
-        host=f"http://{worker_ip}:{config.ollama_port}",
+        host=node_host,
         timeout=config.request_timeout,
     )
     MAX_JUDGE_RETRIES = 3
+
+    # Warm the judge model once per consumer: the judge phase follows inference,
+    # so this node likely has a *target* model resident and must swap. Paying the
+    # load here (with the long load timeout) keeps it out of the first judgment's
+    # request_timeout. Failures are non-fatal — tasks retry individually below.
+    try:
+        await ensure_model_loaded(node_host, config.judge_model, config.model_load_timeout)
+    except Exception as e:
+        logging.warning(f"[!] Judge model warm-up failed on {worker_ip} (continuing): {e}")
 
     while True:
         try:

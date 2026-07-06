@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -135,6 +136,7 @@ async def start_run(body: dict):
         udp_discovery_port=int(body.get("udp_discovery_port", 5005)),
         timeout=float(body.get("timeout", 3.0)),
         request_timeout=float(body.get("request_timeout", 300.0)),
+        model_load_timeout=float(body.get("model_load_timeout", 1800.0)),
         use_judge=bool(body.get("use_judge", False)),
         judge_model=body.get("judge_model", "qwen3.5:9b"),
         ref_model=body.get("ref_model", models[0]),
@@ -164,6 +166,7 @@ async def start_run(body: dict):
         "status": "running",
         "lines": [],
         "cond": asyncio.Condition(),
+        "started_at": time.time(),
     }
     _RUNS[run_id] = entry
 
@@ -179,6 +182,21 @@ async def start_run(body: dict):
     entry["pump_task"] = asyncio.create_task(_pump_process_output(entry))
 
     return {"run_id": run_id, "total_inferences": 0}
+
+
+# ── /api/run/active ───────────────────────────────────────────────────────────
+@router.get("/active")
+def get_active_run():
+    """Returns the currently running benchmark, if any.
+
+    The Control page calls this on load so it can reattach to a run that
+    survived a tab switch or page reload — the nav tabs are full page loads,
+    which destroy the browser's EventSource but never the run itself.
+    """
+    run_id = _active_run_id()
+    if not run_id:
+        return {"run_id": None}
+    return {"run_id": run_id, "started_at": _RUNS[run_id].get("started_at")}
 
 
 # ── /api/run/abort/{run_id} ───────────────────────────────────────────────────

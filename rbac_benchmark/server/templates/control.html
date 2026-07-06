@@ -82,6 +82,10 @@
           <label class="form-label">Ollama request timeout (s)</label>
           <input type="number" id="request-timeout" value="300" min="30" step="30">
         </div>
+        <div class="form-group">
+          <label class="form-label">Model load timeout (s)</label>
+          <input type="number" id="load-timeout" value="1800" min="60" step="60">
+        </div>
       </div>
     </details>
 
@@ -232,6 +236,25 @@ function persistModels() {
   // DOMContentLoaded restore ran before this async populate, so it couldn't.
   if (window.__restoreFormState) window.__restoreFormState();
 
+  // Reattach to a benchmark that is still running server-side. The nav tabs
+  // are full page loads, so visiting the Dashboard destroys this page's
+  // EventSource and all run state — but never the run itself. The stream
+  // replays the full log buffer from the start, which rebuilds the progress
+  // counters and live thought feed exactly as if we had never left.
+  try {
+    const active = await api('/api/run/active');
+    if (active.run_id) {
+      _runId = active.run_id;
+      _outcomes = {}; _completed = 0; _total = 0;
+      _thoughts = []; _thoughtIdx = 0; _lastMatrix = null;
+      _startTs = active.started_at ? active.started_at * 1000 : Date.now();
+      setRunning(true);
+      showStatus('warn', 'Reattached to a benchmark already in progress.');
+      openStream(_runId);
+      return; // the replayed stream repopulates thoughts; skip loading stale results
+    }
+  } catch (_) { /* server unreachable — fall through to normal idle load */ }
+
   // Load thoughts from existing results
   loadThoughts();
 })();
@@ -307,6 +330,7 @@ function getConfig() {
     kappa_seed:       parseInt(document.getElementById('kappa-seed').value),
     timeout:          parseFloat(document.getElementById('timeout').value),
     request_timeout:  parseFloat(document.getElementById('request-timeout').value),
+    model_load_timeout: parseFloat(document.getElementById('load-timeout').value),
     ollama_port:      parseInt(document.getElementById('ollama-port').value),
     udp_discovery_port: parseInt(document.getElementById('udp-port').value),
   };
