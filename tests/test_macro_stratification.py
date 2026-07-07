@@ -126,19 +126,23 @@ def test_judge_only_sees_trace_text():
     from rbac_benchmark.evaluation.llm_judge import LLMJudge
     from rbac_benchmark.orchestration import master_node
 
-    # (a) analyze_cognitive_state takes ONLY the trace — no tag/key parameter exists to leak.
+    # (a) analyze_cognitive_state takes only the trace + the optional native-thinking
+    # channel (the model's own reasoning, opt-in via config.judge_uses_native_thinking) —
+    # no design-tag/key parameter exists to leak.
     params = [p for p in inspect.signature(LLMJudge.analyze_cognitive_state).parameters
               if p != "self"]
-    assert params == ["target_raw_text"]
+    assert params == ["target_raw_text", "native_thinking"]
 
-    # (b) its prompt is built from the trace and never references the design tags.
+    # (b) its prompt is built from the trace (+ native thinking) and never references
+    # the design tags.
     judge_src = inspect.getsource(LLMJudge.analyze_cognitive_state)
     for forbidden in ("injection_lever", "target_severity", "injection_key"):
         assert forbidden not in judge_src
 
-    # (c) the judge worker feeds only the trace text into the judge.
+    # (c) the judge worker feeds only the trace text (+ its own native thinking trace,
+    # aligned by index) into the judge — never a design tag.
     worker_src = inspect.getsource(master_node.judge_worker_consumer)
-    assert "analyze_cognitive_state(text)" in worker_src
+    assert "analyze_cognitive_state(text, native_thinking=native_thinking)" in worker_src
     for forbidden in ("injection_lever", "target_severity"):
         assert forbidden not in worker_src
 

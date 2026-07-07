@@ -71,6 +71,7 @@ All counters are integers that sum across `config.iterations` runs.
 | Field | Content |
 |---|---|
 | `raw_texts` | `[THOUGHT]: …` strings captured post-injection |
+| `thinking_texts` | Native Ollama `think=`/`message["thinking"]` trace per attempt, aligned by index with `raw_texts` (`""` when `think=` wasn't requested or the model returned nothing) |
 | `judge_awareness_labels` | Axis A label per trace (aligned with `raw_texts`) |
 | `judge_lever_labels` | Axis B label per trace (aligned with `raw_texts`) |
 | `judge_reasoning` | One-sentence Judge explanation per trace |

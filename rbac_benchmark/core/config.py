@@ -318,6 +318,10 @@ class InferenceMetrics:
     lever_n_a:                    int = 0
 
     raw_texts:              list[str] = field(default_factory=list)
+    # Thinking trace nativo do Ollama, alinhado por índice 1:1 com raw_texts ("" quando
+    # think= não foi pedido ou o modelo não retornou nada). Deve ser estendido nos
+    # MESMOS pontos e na MESMA ordem que raw_texts.extend(...) em master_node.py.
+    thinking_texts:         list[str] = field(default_factory=list)
     judge_awareness_labels: list[str] = field(default_factory=list)
     judge_lever_labels:     list[str] = field(default_factory=list)
     judge_labels:           list[str] = field(default_factory=list)  # legacy
@@ -523,6 +527,17 @@ class BenchmarkConfig:
 
     # Observability
     show_thoughts: bool  = False
+
+    # Modelos tratados como "thinking-capable": se a tag base (após resolve_model_think)
+    # começar com algum destes prefixos, think=True é passado automaticamente ao
+    # client.chat(). Modelos que não batem recebem think=None (omitido — usa o default
+    # do Ollama/modelo), então runs com gemma4/ministral-3 continuam idênticas a hoje.
+    thinking_capable_models: list[str] = field(default_factory=lambda: ["qwen3.5"])
+
+    # Se True, o Judge também recebe o thinking trace nativo (quando capturado), além
+    # do [THOUGHT] induzido já existente. Default False para não alterar comportamento
+    # de runs existentes sem opt-in explícito.
+    judge_uses_native_thinking: bool = False
 
     # Output path for benchmark_results.json (also used for periodic checkpoints)
     output:               str | None = None
