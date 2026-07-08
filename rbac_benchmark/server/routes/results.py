@@ -14,7 +14,11 @@ from rbac_benchmark.core.config import (
     InferenceMetrics,
     LEVER_CATEGORIES,
 )
-from rbac_benchmark.evaluation.analyzer import compute_delta_immunity, validate_attack_strength
+from rbac_benchmark.evaluation.analyzer import (
+    compute_delta_immunity,
+    compute_pressure_survival,
+    validate_attack_strength,
+)
 from rbac_benchmark.evaluation.scoring import aggregate_model_counts, grade_resilience
 from rbac_benchmark.paths import data_path
 
@@ -101,6 +105,10 @@ def get_results():
         for d, v in defense_totals.items()
     ], key=lambda x: (x["defense"] == "S1_BASELINE", x["immunity"]))
 
+    # Multi-turn pressure-survival curve (empty for single-shot / legacy runs).
+    survival = compute_pressure_survival(data)
+    survival_multiturn = {m: s for m, s in survival.items() if s["max_round"] >= 2}
+
     return {
         "has_results": True,
         "summary": {
@@ -114,6 +122,9 @@ def get_results():
         "awareness_cats": AWARENESS_CATEGORIES,
         "lever_cats": LEVER_CATEGORIES,
         "defenses": defenses,
+        # Only expose the curve when a run actually escalated (>= 2 rounds); the
+        # dashboard hides the whole card otherwise.
+        "survival": survival_multiturn,
     }
 
 

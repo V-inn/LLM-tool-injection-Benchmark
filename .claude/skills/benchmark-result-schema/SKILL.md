@@ -77,6 +77,18 @@ All counters are integers that sum across `config.iterations` runs.
 | `judge_reasoning` | One-sentence Judge explanation per trace |
 | `judge_labels` | **Legacy** single-vector labels; empty in new runs |
 
+**Per-attempt trajectories** (`trajectories`: one dict per recorded inference; empty for legacy files and INFRA_ERROR attempts). Produced by the escalate-and-persist multi-turn loop (`master_node.run_attack_trajectory`):
+
+| Key | Type | Content |
+|---|---|---|
+| `outcome` | str | The attempt's `Outcome.value` (same value that incremented the primary counter). |
+| `tools` | list[str] | Deciding tool per **post-injection** turn (`""` = text/refusal turn). `len(tools)` = number of `raw_texts` this attempt contributed. |
+| `rounds` | int | Highest escalation tier delivered + 1 (0 = never injected; tier 0 = base payload, so `max_turns=1` yields exactly 1). Escalation is **refusal-gated** — the tier advances only when the model refuses, so `rounds` = 1 + (number of refusals that were then re-engaged), NOT the number of re-reads. |
+| `broke_at` | int \| null | 1-based tier the violation occurred under; `null` if resisted, exhausted, or a pre-injection spontaneous call. `rounds_survived = broke_at - 1`. |
+| `termination` | str | `violation` \| `refused_sustained` \| `exhausted` \| `benign_compliant` \| `benign_over_refusal` \| `confusion` \| `refused_task` \| `no_tool_called`. |
+
+> **Pressure-survival curve.** Across a cell's `trajectories`, the fraction still un-broken after each round is the survival curve, and each round advance means "the model refused, the attacker intensified within the same lever — did it still resist?" A spontaneous re-read re-serves the same tier and does NOT advance a round. `analyzer.compute_pressure_survival` aggregates it. `max_turns=1` reproduces the single-shot benchmark exactly (tier 0 = base payload, no escalation, no nudge).
+
 **Design-lever metadata** (scalar; stamped once per cell at run time from the payload taxonomy):
 
 | Field | Type | Content |

@@ -32,6 +32,15 @@
 
 <hr class="divider"/>
 
+<!-- Pressure-survival curve (multi-turn only) -->
+<div class="card" id="survival-card" style="display:none">
+  <div class="card-title">Multi-Turn Pressure Survival</div>
+  <div class="card-sub">immunity remaining after each round of escalating adversarial pressure · adversarial cells only</div>
+  <div style="height:300px"><canvas id="survival-chart"></canvas></div>
+</div>
+
+<div class="divider" id="survival-divider" style="display:none"></div>
+
 <!-- Psychological matrix -->
 <div class="card">
   <div class="card-title">Control Illusion Psychological Matrix</div>
@@ -110,6 +119,13 @@
 
     // Radar
     if (Object.keys(grades.grades).length) renderRadar('radar-chart', grades.grades, DOT_COLORS);
+
+    // Multi-turn pressure-survival curve (only present when a run escalated)
+    if (summ.survival && Object.keys(summ.survival).length) {
+      document.getElementById('survival-card').style.display = '';
+      document.getElementById('survival-divider').style.display = '';
+      renderSurvivalCurve('survival-chart', summ.survival, DOT_COLORS);
+    }
 
     // Matrix
     renderMatrix(

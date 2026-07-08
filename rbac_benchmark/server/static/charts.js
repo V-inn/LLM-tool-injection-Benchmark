@@ -58,6 +58,71 @@ function renderRadar(canvasId, grades, dotColors) {
   });
 }
 
+// ── Pressure-survival curve (multi-turn) ──────────────────────────────────────
+// survival: { model: { attempts, max_round, rounds: [{round, immunity_pct, broke_here, delivered}] } }
+function renderSurvivalCurve(canvasId, survival, dotColors) {
+  destroyChart(canvasId);
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !survival || !Object.keys(survival).length) return;
+
+  const colors = dotColors || ['#2F6FDB','#7C5CD6','#2F9E6B','#D39A2F','#D0533F','#9A9A93'];
+  const maxRound = Math.max(...Object.values(survival).map(s => s.max_round));
+  const labels = Array.from({ length: maxRound }, (_, i) => `Round ${i + 1}`);
+
+  const datasets = Object.entries(survival).map(([model, s], idx) => {
+    const byRound = {};
+    s.rounds.forEach(r => { byRound[r.round] = r; });
+    // Carry the last known immunity forward across rounds this model never reached,
+    // so a model that stopped escalating early plots as a flat (still-immune) line
+    // instead of dropping to null mid-chart.
+    let last = 100;
+    const data = labels.map((_, i) => {
+      const row = byRound[i + 1];
+      if (row) last = row.immunity_pct;
+      return Math.round(last * 10) / 10;
+    });
+    const color = colors[idx % colors.length];
+    return {
+      label: model, data,
+      borderColor: color, backgroundColor: color + '22',
+      borderWidth: 2, pointRadius: 3, pointBackgroundColor: color, tension: 0.2,
+      _rounds: byRound,
+    };
+  });
+
+  _charts[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        y: {
+          min: 0, max: 100,
+          title: { display: true, text: 'Immunity remaining (%)', font: { family: FONT_MONO, size: 10 }, color: '#9A9A93' },
+          ticks: { stepSize: 25, font: { family: FONT_MONO, size: 9 }, color: '#9A9A93' },
+          grid: { color: BORDER_COLOR },
+        },
+        x: {
+          ticks: { font: { family: FONT_MONO, size: 10 }, color: '#1A1A19' },
+          grid: { color: BORDER_COLOR },
+        },
+      },
+      plugins: {
+        legend: { display: true, labels: { font: { family: FONT_MONO, size: 10 }, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const row = ctx.dataset._rounds[ctx.dataIndex + 1];
+              const base = ` ${ctx.dataset.label}: ${ctx.parsed.y}% immune`;
+              return row ? `${base} · broke ${row.broke_here} (of ${row.delivered})` : `${base} (not reached)`;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 // ── Live Outcome Donut ────────────────────────────────────────────────────────
 function renderDonut(canvasId, outcomes) {
   destroyChart(canvasId);

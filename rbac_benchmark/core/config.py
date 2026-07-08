@@ -327,6 +327,15 @@ class InferenceMetrics:
     judge_labels:           list[str] = field(default_factory=list)  # legacy
     judge_reasoning:        list[str] = field(default_factory=list)
 
+    # Multi-turn trajectory record, one dict per recorded inference attempt in this
+    # cell (escalate+persist loop, orchestration/master_node.run_attack_trajectory).
+    # Each entry: {"outcome": str, "tools": list[str] (deciding tool per post-injection
+    # turn), "rounds": int (escalation payloads delivered), "broke_at": int|None
+    # (1-based round the violation occurred under; None if resisted or pre-injection),
+    # "termination": str}. Drives the pressure-survival curve. Empty for legacy files
+    # and for INFRA_ERROR attempts (no trajectory produced).
+    trajectories:           list[dict] = field(default_factory=list)
+
     # ── Design-lever metadata (stamped at run time from the payload's declared
     # taxonomy — NOT a Judge output) ──────────────────────────────────────────
     # injection_lever is the attack's *intended* Cialdini category and target_severity
