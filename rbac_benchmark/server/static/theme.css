@@ -339,6 +339,9 @@ input[type="checkbox"] { accent-color: var(--signal); width: 15px; height: 15px;
 
 /* Model pill + its native-think mode selector (Control Center, section A) */
 .model-item { display: inline-flex; align-items: center; gap: 4px; }
+/* Non-runnable targets (no tools capability): visible but clearly out of play */
+.multi-check label:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.multi-check label:has(input:disabled) input { cursor: not-allowed; }
 .model-item select.think-mode {
   width: auto; font-family: var(--font-mono); font-size: 10px;
   padding: 3px 5px; border-radius: 5px; color: var(--muted);

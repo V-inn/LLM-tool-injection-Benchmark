@@ -22,7 +22,10 @@
           <div class="hint" style="margin-top:6px">
             think mode: <b>default</b> keeps the Ollama request untouched · <b>on/off</b> pins
             <code>think=</code> and labels the row <code>#think</code>/<code>#nothink</code> ·
-            <b>A/B</b> runs both variants as two independent result rows.
+            <b>A/B</b> runs both variants as two independent result rows. Only shown for
+            models whose Ollama capabilities include <code>thinking</code>. Models without
+            the <code>tools</code> capability (embedding, plain vision) are disabled — the
+            benchmark is tool-calling end to end.
           </div>
         </div>
         <div class="form-group">
@@ -258,23 +261,45 @@ function refreshRefModelOptions(allModels) {
   try { savedModels = JSON.parse(localStorage.getItem(MODELS_KEY) || 'null'); } catch (_) {}
   try { savedModes = JSON.parse(localStorage.getItem(THINK_KEY) || '{}') || {}; } catch (_) {}
 
+  // Capability semantics: an unknown set (old client/server doesn't report the
+  // field) counts as HAVING every capability — losing a real model beats
+  // offering an impossible one only when we know it's impossible.
+  const capsMap = d.capabilities || {};
+  const hasCap = (m, cap) => {
+    const c = capsMap[m];
+    return Array.isArray(c) ? c.includes(cap) : true;
+  };
+  // Targets must do tool calling; the Judge only needs plain completion.
+  const targetCapable = models.filter(m => hasCap(m, 'tools'));
+  const judgeCapable  = models.filter(m => hasCap(m, 'completion'));
+
   const checkboxes = document.getElementById('model-checkboxes');
   if (models.length === 0) {
     checkboxes.innerHTML = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">No local models found (Ollama offline?)</span>';
   } else {
     // Restore the previously-checked set if we have one; otherwise default to the
-    // first two models. Stale saved entries (models no longer installed) are ignored.
-    // The think-mode select lives NEXT TO the label, not inside it — inside, every
-    // click on the select would also toggle the checkbox.
-    checkboxes.innerHTML = models.map((m, i) => {
-      const checked = savedModels ? savedModels.includes(m) : (i < 2);
+    // first two RUNNABLE models. Stale saved entries (models no longer installed)
+    // are ignored. The think-mode select lives NEXT TO the label, not inside it —
+    // inside, every click on the select would also toggle the checkbox.
+    const defaultChecked = new Set(targetCapable.slice(0, 2));
+    checkboxes.innerHTML = models.map(m => {
+      // The benchmark is tool-calling end to end: a model without the "tools"
+      // capability (embedding, plain vision, …) fails Phase 1 on every task, so
+      // it is shown but not selectable as a target.
+      const canTool = hasCap(m, 'tools');
+      const checked = savedModels ? (canTool && savedModels.includes(m)) : defaultChecked.has(m);
       const mode = savedModes[m] || '';
+      // Pinning think= on a model without the "thinking" capability is a hard
+      // Ollama 400, so the selector only renders when the capability is present.
+      const canThink = canTool && hasCap(m, 'thinking');
       const opt = (v, label) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${label}</option>`;
-      return `<span class="model-item">
-        <label><input type="checkbox" name="models" value="${m}" ${checked ? 'checked' : ''}><span>${m}</span></label>
+      const thinkSel = canThink ? `
         <select class="think-mode" data-model="${m}" title="native think mode">
           ${opt('', 'think: default')}${opt('think', 'think: on')}${opt('nothink', 'think: off')}${opt('both', 'think: A/B')}
-        </select>
+        </select>` : '';
+      const title = canTool ? '' : ' title="no tools capability — cannot run the tool-calling benchmark"';
+      return `<span class="model-item"${title}>
+        <label><input type="checkbox" name="models" value="${m}" ${checked ? 'checked' : ''} ${canTool ? '' : 'disabled'}><span>${m}</span></label>${thinkSel}
       </span>`;
     }).join('');
     // One listener covers both the checkboxes and the think-mode selects ('change'
@@ -282,13 +307,16 @@ function refreshRefModelOptions(allModels) {
     checkboxes.addEventListener('change', () => {
       persistModels();
       persistThinkModes();
-      refreshRefModelOptions(models);
+      refreshRefModelOptions(targetCapable);
     });
   }
 
+  // The Judge is a plain chat call (no tools): embedding-only models are out,
+  // anything that can complete is in. ref-model starts from the same list and is
+  // immediately narrowed to effective target labels below.
   ['judge-model','ref-model'].forEach(id => {
     const sel = document.getElementById(id);
-    sel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+    sel.innerHTML = judgeCapable.map(m => `<option value="${m}">${m}</option>`).join('');
   });
 
   // Re-apply saved <select> values now that the options exist — the app.js
@@ -297,7 +325,7 @@ function refreshRefModelOptions(allModels) {
 
   // After the saved ref-model value is back, swap its options for the effective
   // labels (bare tags or #think/#nothink variants) implied by the current selection.
-  refreshRefModelOptions(models);
+  refreshRefModelOptions(targetCapable);
 
   // Reattach to a benchmark that is still running server-side. The nav tabs
   // are full page loads, so visiting the Dashboard destroys this page's

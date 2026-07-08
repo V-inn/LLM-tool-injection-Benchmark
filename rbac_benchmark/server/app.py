@@ -32,6 +32,30 @@ def get_available_local_models():
         return []
 
 
+def get_model_capabilities(models: list[str]) -> dict[str, list[str] | None]:
+    """Best-effort map of model -> Ollama capability strings, None = unknown.
+
+    `ollama show` reports e.g. ["completion", "tools", "thinking"] for thinking
+    models and ["embedding"] for embedding-only ones. Older client/server
+    versions don't return the field, and a model can disappear between list()
+    and show() — those map to None so the UI can treat the capability set as
+    unknown instead of guessing in either direction.
+    """
+    try:
+        import ollama
+    except Exception:
+        return {m: None for m in models}
+    caps: dict[str, list[str] | None] = {}
+    for m in models:
+        try:
+            info = ollama.show(m)
+            c = info.get("capabilities") if isinstance(info, dict) else getattr(info, "capabilities", None)
+            caps[m] = list(c) if c is not None else None
+        except Exception:
+            caps[m] = None
+    return caps
+
+
 def ollama_is_online() -> bool:
     try:
         import ollama
@@ -65,7 +89,12 @@ _sys = _AR()
 
 @_sys.get("/models")
 def get_models():
-    return {"models": get_available_local_models(), "online": ollama_is_online()}
+    models = get_available_local_models()
+    return {
+        "models": models,
+        "capabilities": get_model_capabilities(models),
+        "online": ollama_is_online(),
+    }
 
 app.include_router(_sys, prefix="/api/system", tags=["system"])
 
