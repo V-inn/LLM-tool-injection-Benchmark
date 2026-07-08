@@ -19,6 +19,11 @@
           <div class="multi-check" id="model-checkboxes">
             <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">Loading models…</span>
           </div>
+          <div class="hint" style="margin-top:6px">
+            think mode: <b>default</b> keeps the Ollama request untouched · <b>on/off</b> pins
+            <code>think=</code> and labels the row <code>#think</code>/<code>#nothink</code> ·
+            <b>A/B</b> runs both variants as two independent result rows.
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">Judge model</label>
@@ -94,6 +99,7 @@
       <div class="accordion-body">
         <div class="check-row"><input type="checkbox" id="use-judge" checked><label for="use-judge">Enable batch evaluation (Axis A + B)</label></div>
         <div class="check-row"><input type="checkbox" id="show-thoughts" checked><label for="show-thoughts">Log agent [THOUGHT] traces</label></div>
+        <div class="check-row"><input type="checkbox" id="judge-native-think"><label for="judge-native-think">Judge sees native thinking traces (when captured)</label></div>
       </div>
     </details>
 
@@ -200,10 +206,46 @@ let _lastMatrix = null;  // most recent "model | defense | attack" key seen in t
 // layer in app.js because these boxes are created asynchronously and carry no
 // stable `id` (only name="models" value="<model>"), which app.js keys on.
 const MODELS_KEY = 'rbac:' + location.pathname + ':models';
+// Per-model native-think mode ('' default | 'think' | 'nothink' | 'both'), same
+// async-creation reason as above. '' entries are dropped on save.
+const THINK_KEY  = 'rbac:' + location.pathname + ':thinkmodes';
 
 function persistModels() {
   const sel = [...document.querySelectorAll('input[name="models"]:checked')].map(e => e.value);
   try { localStorage.setItem(MODELS_KEY, JSON.stringify(sel)); } catch (_) {}
+}
+
+function persistThinkModes() {
+  const modes = {};
+  document.querySelectorAll('select.think-mode').forEach(s => { if (s.value) modes[s.dataset.model] = s.value; });
+  try { localStorage.setItem(THINK_KEY, JSON.stringify(modes)); } catch (_) {}
+}
+
+// Expands the checked models through their think mode into the labels the master
+// runs: '' -> bare tag (think omitted from the request — pre-feature behaviour),
+// 'think'/'nothink' -> one suffixed variant, 'both' -> A/B ablation (two rows).
+function effectiveModels() {
+  const out = [];
+  document.querySelectorAll('input[name="models"]:checked').forEach(e => {
+    const sel = document.querySelector(`select.think-mode[data-model="${CSS.escape(e.value)}"]`);
+    const mode = sel ? sel.value : '';
+    if (mode === 'think' || mode === 'nothink') out.push(`${e.value}#${mode}`);
+    else if (mode === 'both') out.push(`${e.value}#think`, `${e.value}#nothink`);
+    else out.push(e.value);
+  });
+  return out;
+}
+
+// The reference model must name an actual result row, so its options are the
+// EFFECTIVE labels (with #think/#nothink) — unlike the judge model, which is a
+// real Ollama call and must stay a bare tag.
+function refreshRefModelOptions(allModels) {
+  const sel = document.getElementById('ref-model');
+  const prev = sel.value;
+  const opts = effectiveModels();
+  const list = opts.length ? opts : allModels;
+  sel.innerHTML = list.map(m => `<option value="${m}">${m}</option>`).join('');
+  if (list.includes(prev)) sel.value = prev;
 }
 
 // Load models on page load
@@ -212,7 +254,9 @@ function persistModels() {
   const models = d.models;
 
   let savedModels = null;
+  let savedModes = {};
   try { savedModels = JSON.parse(localStorage.getItem(MODELS_KEY) || 'null'); } catch (_) {}
+  try { savedModes = JSON.parse(localStorage.getItem(THINK_KEY) || '{}') || {}; } catch (_) {}
 
   const checkboxes = document.getElementById('model-checkboxes');
   if (models.length === 0) {
@@ -220,11 +264,26 @@ function persistModels() {
   } else {
     // Restore the previously-checked set if we have one; otherwise default to the
     // first two models. Stale saved entries (models no longer installed) are ignored.
+    // The think-mode select lives NEXT TO the label, not inside it — inside, every
+    // click on the select would also toggle the checkbox.
     checkboxes.innerHTML = models.map((m, i) => {
       const checked = savedModels ? savedModels.includes(m) : (i < 2);
-      return `<label><input type="checkbox" name="models" value="${m}" ${checked ? 'checked' : ''}><span>${m}</span></label>`;
+      const mode = savedModes[m] || '';
+      const opt = (v, label) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${label}</option>`;
+      return `<span class="model-item">
+        <label><input type="checkbox" name="models" value="${m}" ${checked ? 'checked' : ''}><span>${m}</span></label>
+        <select class="think-mode" data-model="${m}" title="native think mode">
+          ${opt('', 'think: default')}${opt('think', 'think: on')}${opt('nothink', 'think: off')}${opt('both', 'think: A/B')}
+        </select>
+      </span>`;
     }).join('');
-    checkboxes.addEventListener('change', persistModels);
+    // One listener covers both the checkboxes and the think-mode selects ('change'
+    // bubbles); either kind of edit can invalidate the ref-model option list.
+    checkboxes.addEventListener('change', () => {
+      persistModels();
+      persistThinkModes();
+      refreshRefModelOptions(models);
+    });
   }
 
   ['judge-model','ref-model'].forEach(id => {
@@ -235,6 +294,10 @@ function persistModels() {
   // Re-apply saved <select> values now that the options exist — the app.js
   // DOMContentLoaded restore ran before this async populate, so it couldn't.
   if (window.__restoreFormState) window.__restoreFormState();
+
+  // After the saved ref-model value is back, swap its options for the effective
+  // labels (bare tags or #think/#nothink variants) implied by the current selection.
+  refreshRefModelOptions(models);
 
   // Reattach to a benchmark that is still running server-side. The nav tabs
   // are full page loads, so visiting the Dashboard destroys this page's
@@ -273,12 +336,19 @@ function updateThoughtInspector() {
   const t = _thoughts[Math.max(0, Math.min(_thoughtIdx, _thoughts.length - 1))];
   const awColor = AWARENESS_COLORS[t.awareness] || '#9A9A93';
   document.getElementById('thought-pos').textContent = `${_thoughtIdx + 1} / ${_thoughts.length}`;
+  // Native thinking is collapsed by default: traces run long and would push the
+  // [THOUGHT] statement (the thing the Judge scores) below the fold.
+  const nativeBlock = t.thinking ? `
+    <details class="thought-native">
+      <summary>NATIVE THINKING (Ollama think channel)</summary>
+      <div class="thought-body">${t.thinking}</div>
+    </details>` : '';
   document.getElementById('thought-content').innerHTML = `
     <div class="thought-chips">
       <span class="chip chip-model">${t.model}</span>
       <span class="chip chip-def">${t.defense}</span>
     </div>
-    <div class="thought-body">${t.text}</div>
+    <div class="thought-body">${t.text}</div>${nativeBlock}
     <div class="thought-axis">
       <span class="thought-axis-label">JUDGE · AXIS A</span>
       <span class="thought-awareness" style="color:${awColor}">${t.awareness || '?'}</span>
@@ -303,6 +373,7 @@ function pushLiveThought(text) {
     model:     parts[0] || '—',
     defense:   parts[1] || '—',
     text,
+    thinking:  null,   // native trace is not in the log stream; loadThoughts() backfills it
     awareness: null,   // Axis-A label is assigned later by the Judge phase
     lever:     null,
   });
@@ -311,7 +382,9 @@ function pushLiveThought(text) {
 }
 
 function getConfig() {
-  const models = [...document.querySelectorAll('input[name="models"]:checked')].map(e => e.value);
+  // Send the EFFECTIVE labels — think mode is always explicit in the model name
+  // (#think/#nothink); the master strips the suffix before talking to Ollama.
+  const models = effectiveModels();
   return {
     models,
     iterations:       parseInt(document.getElementById('iterations').value),
@@ -323,6 +396,7 @@ function getConfig() {
     use_generated_defenses:   document.getElementById('use-gen-def').checked,
     use_judge:        document.getElementById('use-judge').checked,
     judge_model:      document.getElementById('judge-model').value,
+    judge_uses_native_thinking: document.getElementById('judge-native-think').checked,
     show_thoughts:    document.getElementById('show-thoughts').checked,
     ref_model:        document.getElementById('ref-model').value,
     attack_validity_threshold: parseInt(document.getElementById('attack-threshold').value) / 100,

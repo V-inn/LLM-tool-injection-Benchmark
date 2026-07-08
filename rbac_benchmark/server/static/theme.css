@@ -337,6 +337,17 @@ input[type="checkbox"] { accent-color: var(--signal); width: 15px; height: 15px;
 .multi-check input:checked + span { color: var(--signal); font-weight: 600; }
 .multi-check label:has(input:checked) { border-color: var(--signal); background: #EEF3FB; }
 
+/* Model pill + its native-think mode selector (Control Center, section A) */
+.model-item { display: inline-flex; align-items: center; gap: 4px; }
+.model-item select.think-mode {
+  width: auto; font-family: var(--font-mono); font-size: 10px;
+  padding: 3px 5px; border-radius: 5px; color: var(--muted);
+}
+/* Surface non-default modes at a glance, mirroring the checked-pill treatment */
+.model-item select.think-mode:has(option:checked:not([value=""])) {
+  color: var(--signal); border-color: var(--signal);
+}
+
 /* ── Buttons ───────────────────────────────────────────────────────────────── */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -412,6 +423,13 @@ input[type="checkbox"] { accent-color: var(--signal); width: 15px; height: 15px;
      that resizing was shifting the Older/Newer buttons out from under a rapid clicker. */
   height: 180px; overflow-y: auto;
 }
+/* Collapsed native-thinking trace under the [THOUGHT] body */
+.thought-native { margin-bottom: 11px; }
+.thought-native summary {
+  font-family: var(--font-mono); font-size: 9.5px; color: var(--muted);
+  cursor: pointer; margin-bottom: 6px; user-select: none;
+}
+.thought-native .thought-body { height: 120px; margin-bottom: 0; }
 .thought-axis { display: flex; align-items: center; gap: 8px; }
 .thought-axis-label { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }
 .thought-awareness { font-family: var(--font-mono); font-size: 10px; font-weight: 500; }

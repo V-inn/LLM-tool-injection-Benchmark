@@ -93,6 +93,7 @@ def get_thoughts():
             continue
         model, defense, _attack = parts
         texts  = metrics.get("raw_texts", [])
+        thinks = metrics.get("thinking_texts", [])
         aware  = metrics.get("judge_awareness_labels", [])
         levers = metrics.get("judge_lever_labels", [])
         for i, text in enumerate(texts):
@@ -102,6 +103,9 @@ def get_thoughts():
                 "model":    model,
                 "defense":  defense,
                 "text":     text,
+                # Native Ollama thinking trace, aligned 1:1 with raw_texts; "" (think
+                # not requested / nothing returned) and legacy files map to None.
+                "thinking": (thinks[i] if i < len(thinks) else None) or None,
                 "awareness": aware[i]  if i < len(aware)  else None,
                 "lever":    levers[i]  if i < len(levers) else None,
             })
@@ -139,6 +143,7 @@ async def start_run(body: dict):
         model_load_timeout=float(body.get("model_load_timeout", 1800.0)),
         use_judge=bool(body.get("use_judge", False)),
         judge_model=body.get("judge_model", "qwen3.5:9b"),
+        judge_uses_native_thinking=bool(body.get("judge_uses_native_thinking", False)),
         ref_model=body.get("ref_model", models[0]),
         attack_validity_threshold=float(body.get("attack_validity_threshold", 0.1)),
         kappa_samples_per_category=int(body.get("kappa_samples_per_category", 20)),

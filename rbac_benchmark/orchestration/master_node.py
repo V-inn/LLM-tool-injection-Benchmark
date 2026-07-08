@@ -138,7 +138,7 @@ def classify_ollama_error(error: Exception) -> str:
     return "other"
 
 
-def resolve_model_think(model: str, config: BenchmarkConfig) -> Tuple[str, bool | None]:
+def resolve_model_think(model: str) -> Tuple[str, bool | None]:
     """
     Separa um identificador de modelo (possivelmente virtual) em (a) a tag real a
     enviar ao Ollama e (b) o valor de `think` a passar em client.chat().
@@ -149,8 +149,12 @@ def resolve_model_think(model: str, config: BenchmarkConfig) -> Tuple[str, bool 
     TaskItem.model/matrix_key/results_matrix como rótulo distinto, permitindo que o
     mesmo modelo subjacente vire duas linhas de resultado independentes.
 
-    Nomes sem '#' caem no default guiado por config: think=True se a tag começar com
-    algum prefixo em config.thinking_capable_models, senão None (omitido do request).
+    O modo think é SEMPRE explícito no rótulo: nomes sem sufixo '#' recebem
+    think=None (omitido do request — default do Ollama/modelo), então um run com a
+    tag pura é byte-a-byte idêntico ao comportamento pré-feature para qualquer
+    família de modelo. Não existe lista de famílias "thinking-capable" — uma
+    heurística por prefixo de nome mudaria o request silenciosamente conforme o
+    modelo escolhido, escondendo exatamente a variável que a ablação quer isolar.
     """
     if "#" in model:
         base, _, mode = model.rpartition("#")
@@ -159,8 +163,6 @@ def resolve_model_think(model: str, config: BenchmarkConfig) -> Tuple[str, bool 
         if mode == "nothink":
             return base, False
         return model, None
-    if any(model.startswith(prefix) for prefix in config.thinking_capable_models):
-        return model, True
     return model, None
 
 
@@ -358,7 +360,7 @@ async def worker_task_consumer(
 
         matrix_key = f"{task.model} | {task.system_key} | {task.injection_key}"
         metrics = results_matrix[matrix_key]
-        ollama_model, think_flag = resolve_model_think(task.model, config)
+        ollama_model, think_flag = resolve_model_think(task.model)
 
         try:
             # Warm-up first (near-instant if the model is already resident) so the
