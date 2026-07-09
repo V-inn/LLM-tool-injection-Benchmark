@@ -105,8 +105,9 @@ Two bash scripts are provided to automatically configure and start the nodes:
     Run the worker setup script. This exposes the Ollama server to the network (`0.0.0.0`) and starts the worker daemon (a UDP discovery responder that also broadcasts a periodic `OLLAMA_ALIVE` heartbeat, plus a restart-on-crash supervisor for Ollama).
     ```bash
     bash start_worker.sh            # interactive; Ctrl-C to stop
-    bash start_worker.sh --daemon   # detached (setsid+nohup): survives the terminal/SSH session closing; logs to worker.log
+    bash start_worker.sh --daemon   # detached (setsid+nohup): survives the terminal/SSH session closing; logs to $TMPDIR/rbac_worker.log
     ```
+    **`start_worker.sh` is fully self-contained** — the worker daemon is embedded in the script (stdlib-only Python, materialised to a temp file at launch). Copy just this one file to a worker machine (USB stick, `scp`, …); it needs only `ollama` and `python3`, **no repository checkout and no `pip install`**.
     For an always-on worker that also restarts on reboot, install the provided systemd unit (edit `User=`/`WorkingDirectory=` first):
     ```bash
     sudo cp deploy/rbac-worker.service /etc/systemd/system/

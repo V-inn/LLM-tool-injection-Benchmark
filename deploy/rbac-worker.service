@@ -7,7 +7,8 @@
 #
 # INSTALL
 #   1. Edit User=, Group=, and WorkingDirectory= below to match this machine
-#      (WorkingDirectory must be the repository root that contains start_worker.sh).
+#      (WorkingDirectory is just the folder that contains start_worker.sh — the
+#      script is self-contained, so no repository checkout is required there).
 #   2. sudo cp deploy/rbac-worker.service /etc/systemd/system/
 #   3. sudo systemctl daemon-reload
 #   4. sudo systemctl enable --now rbac-worker
