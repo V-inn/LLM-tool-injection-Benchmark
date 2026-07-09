@@ -56,6 +56,10 @@
           <input type="checkbox" id="exclude-master">
           <label for="exclude-master">Exclude master node from inference</label>
         </div>
+        <div class="check-row">
+          <input type="checkbox" id="resume">
+          <label for="resume">Resume last run (continue benchmark_results.json — re-runs only missing iterations; requires the same models/defenses/attacks/iterations)</label>
+        </div>
       </div>
     </details>
 
@@ -422,6 +426,7 @@ function getConfig() {
     max_turns:        document.getElementById('multi-turn').checked ? 3 : 1,
     max_retries:      parseInt(document.getElementById('max-retries').value),
     exclude_master:   document.getElementById('exclude-master').checked,
+    resume:           document.getElementById('resume').checked,
     use_custom_prompts:       document.getElementById('use-custom').checked,
     use_generated_injections: document.getElementById('use-gen-inj').checked,
     use_generated_defenses:   document.getElementById('use-gen-def').checked,

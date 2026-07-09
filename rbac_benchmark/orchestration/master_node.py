@@ -69,8 +69,12 @@ import asyncio
 import json
 import argparse
 import logging
+import time
+import uuid
+from pathlib import Path
+from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 import httpx
 from ollama import AsyncClient, ResponseError
@@ -105,6 +109,31 @@ class TaskItem:
 
 # Upper bound on free "worker was busy loading" re-enqueues per task (see TaskItem).
 MAX_LOADING_WAITS = 10
+
+# How long a parked (unhealthy-worker) consumer sleeps between health re-checks.
+PARK_POLL_SECONDS = 2.0
+
+
+@dataclass
+class WorkerState:
+    """
+    Live membership record for one node in the cluster.
+
+    The master keeps a `dict[ip -> WorkerState]` that is updated continuously:
+    `membership_listener` refreshes `last_seen` from each worker's UDP heartbeat,
+    and `membership_supervisor` flips `healthy` (eviction/rejoin) and spawns
+    consumers for newly-seen workers. `worker_task_consumer` reads `healthy` to
+    decide whether to pull work or park.
+
+    is_master marks the loopback (127.0.0.1) node the master contributes itself:
+    it has no worker daemon and therefore sends no heartbeat, so it is seeded
+    permanently healthy and never evicted for staleness.
+    """
+    ip:                str
+    last_seen:         float                # time.monotonic() of the last liveness signal
+    healthy:           bool = True
+    consumers_spawned: bool = False
+    is_master:         bool = False
 
 
 def classify_ollama_error(error: Exception) -> str:
@@ -521,6 +550,7 @@ async def worker_task_consumer(
     task_queue: asyncio.Queue,
     results_matrix: Dict[str, InferenceMetrics],
     config: BenchmarkConfig,
+    worker_state: Optional[WorkerState] = None,
 ):
     """
     Coroutine that drains the task queue for a single Worker Node endpoint.
@@ -529,12 +559,23 @@ async def worker_task_consumer(
     per node) to saturate the worker's Ollama throughput. Each coroutine exits
     when the queue is empty.
 
+    Circuit breaker:
+        - `worker_state` is this node's live membership record. When the membership
+          supervisor marks it unhealthy (heartbeats went stale), the consumer PARKS
+          — it stops pulling new tasks and polls its own health instead of dragging
+          work onto a dead node and burning each task's retry budget. It resumes the
+          instant the worker starts heartbeating again (auto-rejoin). Parking (rather
+          than exiting) keeps queue.join() accounting intact; a parked consumer is
+          cancelled by main() once the queue drains. When worker_state is None (e.g.
+          the always-healthy master loopback or a legacy call) the breaker is inert.
+
     Error handling:
         - Connection/runtime errors trigger a retry up to config.max_retries times.
           The task is re-enqueued with an incremented retry counter.
-        - After max_retries, the task is recorded as NO_TOOL_CALLED (infrastructure
-          failure), keeping the results matrix consistent and distinguishable from
-          model-level failures in the output JSON.
+        - After max_retries against an infrastructure error the attempt is tallied as
+          `infra_error` (a non-scored counter EXCLUDED from total_inferences and all
+          rates) rather than a model outcome, so a network/Ollama outage never dilutes
+          Immunity/FPR and so `--resume` re-runs that iteration on a later, healthy run.
     """
     node_host = f"http://{worker_ip}:{config.ollama_port}"
     client = AsyncClient(host=node_host, timeout=config.request_timeout)
@@ -543,6 +584,13 @@ async def worker_task_consumer(
     loader = AsyncClient(host=node_host, timeout=config.model_load_timeout)
 
     while True:
+        # Circuit breaker: don't pull work toward a node the supervisor has evicted.
+        # Park and re-check; the queue keeps its tasks for a healthy consumer, and
+        # main() cancels us when the run finishes.
+        if worker_state is not None and not worker_state.healthy:
+            await asyncio.sleep(PARK_POLL_SECONDS)
+            continue
+
         try:
             task = task_queue.get_nowait()
         except asyncio.QueueEmpty:
@@ -638,12 +686,18 @@ async def worker_task_consumer(
                     logging.warning(f"[!] Retrying task {matrix_key} (attempt {task.retries}/{config.max_retries})...")
                     task_queue.put_nowait(task)
                 else:
-                    logging.error(f"[!] Max retries exhausted for {matrix_key}. Recording as infrastructure failure.")
+                    logging.error(f"[!] Max retries exhausted for {matrix_key}. Tallying as infra_error (not a model outcome).")
                     # attempt_texts is intentionally discarded here: traces from an
                     # attempt that never produced an outcome would feed the Judge
                     # reasoning that doesn't correspond to any recorded inference.
-                    metrics.record(Outcome.NO_TOOL_CALLED)
-                    logging.info(f"[{worker_ip}] Completed test: {matrix_key} (INFRA_ERROR) -> {Outcome.NO_TOOL_CALLED.value}")
+                    #
+                    # Tally as infra_error, NOT a scored Outcome: an exhausted-retry
+                    # failure is a network/Ollama outage, not model behaviour. Because
+                    # infra_error is excluded from total_inferences, this iteration is
+                    # left "incomplete" so a later `--resume` re-runs it instead of
+                    # baking the outage into Immunity/FPR.
+                    metrics.infra_error += 1
+                    logging.info(f"[{worker_ip}] Abandoned test: {matrix_key} (INFRA_ERROR, will resume) -> infra_error={metrics.infra_error}")
         finally:
             task_queue.task_done()
 
@@ -786,25 +840,319 @@ def save_results_to_disk(
         logging.error(f"\n[!] Critical: Failed to persist benchmark data to disk. Error: {write_error}")
 
 
+# ---------------------------------------------------------------------------
+# Resilience — provenance sidecar and crash-resume reconstruction
+# ---------------------------------------------------------------------------
+
+def _meta_path(output_path: str) -> str:
+    """Provenance sidecar path next to the results file (…/x.json → …/x.meta.json)."""
+    return str(Path(output_path).with_suffix(".meta.json"))
+
+
+def _grid_signature(models, system_keys, injection_keys, iterations) -> dict:
+    """Compact fingerprint of a run's work grid. Two runs with the same signature
+    enumerate the exact same cells × iterations, so their partial results are
+    safe to continue; a different signature means resume would merge incompatible
+    grids and must be refused."""
+    return {
+        "models": sorted(models),
+        "defenses": sorted(system_keys),
+        "attacks": sorted(injection_keys),
+        "iterations": iterations,
+    }
+
+
+def write_provenance(config: BenchmarkConfig, output_path: str,
+                     started_at_iso: str, resumed_from, grid_sig: dict) -> None:
+    """Write the run's identity + grid signature + full config beside the results
+    file. Read back by resume_from_disk to validate a resume, and by any tooling
+    that needs the run parameters (which are otherwise not stored in the flat
+    results JSON). Content is immutable for the life of a run, so it is written
+    once at start."""
+    meta = {
+        "run_id": config.run_id,
+        "started_at": started_at_iso,
+        "resumed_from": resumed_from,
+        "grid": grid_sig,
+        "config": asdict(config),
+    }
+    try:
+        with open(_meta_path(output_path), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=4)
+    except Exception as e:
+        logging.error(f"[!] Failed to write provenance sidecar {_meta_path(output_path)}: {e}")
+
+
+def build_results_grid(config: BenchmarkConfig, system_prompts_dict, injection_payloads_dict,
+                       payload_meta) -> Dict[str, InferenceMetrics]:
+    """Create a fresh, empty result cell for every (model, defense, attack) in the
+    grid, with the design-lever metadata stamped. Does not enqueue anything."""
+    matrix: Dict[str, InferenceMetrics] = {}
+    for model in config.models:
+        for s_key in system_prompts_dict:
+            for i_key in injection_payloads_dict:
+                cell_meta = payload_meta.get(i_key, {})
+                matrix[f"{model} | {s_key} | {i_key}"] = InferenceMetrics(
+                    injection_lever=cell_meta.get("lever"),
+                    target_severity=cell_meta.get("target_severity"),
+                )
+    return matrix
+
+
+def resume_from_disk(config: BenchmarkConfig, results_matrix: Dict[str, InferenceMetrics],
+                     system_keys, injection_keys, payload_meta) -> Tuple[int, Any]:
+    """
+    Rehydrate prior progress into results_matrix IN PLACE from config.output.
+
+    Returns (cells_loaded, resumed_from_run_id). The completed-iteration count of
+    each cell is carried in its InferenceMetrics counters, so the caller enqueues
+    only `iterations - total_inferences` remaining tasks per cell.
+
+    Compatibility is validated against the provenance sidecar's grid signature; if
+    no sidecar exists (a results file predating this feature) it falls back to
+    requiring the on-disk cell keys to match the current grid. An incompatible grid
+    aborts the run (SystemExit) rather than silently merging mismatched data.
+    """
+    output = config.output
+    if not (output and Path(output).exists()):
+        logging.warning(f"[resume] resume=True but no results file at {output!r}; starting fresh.")
+        return 0, None
+
+    with open(output, "r", encoding="utf-8") as f:
+        prior = json.load(f)
+
+    current_keys = set(results_matrix.keys())
+    cur_grid = _grid_signature(config.models, system_keys, injection_keys, config.iterations)
+    meta_path = _meta_path(output)
+    resumed_from = None
+
+    if Path(meta_path).exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        resumed_from = meta.get("run_id")
+        prior_grid = meta.get("grid")
+        if prior_grid and prior_grid != cur_grid:
+            logging.error(f"[resume] Grid mismatch.\n  on disk:  {prior_grid}\n  current:  {cur_grid}")
+            raise SystemExit(
+                "Resume aborted: the current config does not match the run being resumed "
+                "(models/defenses/attacks/iterations differ). Use the original config, or "
+                "run without resume to start a new run into a different --output file."
+            )
+    else:
+        prior_keys = set(prior.keys())
+        if prior_keys and prior_keys != current_keys:
+            logging.error(f"[resume] Cell-key mismatch and no provenance sidecar to arbitrate "
+                          f"({len(prior_keys)} on disk vs {len(current_keys)} current).")
+            raise SystemExit(
+                "Resume aborted: results file cells do not match the current grid and there is "
+                "no provenance sidecar to verify compatibility. Start a fresh run instead."
+            )
+        logging.warning("[resume] No provenance sidecar; validated by cell keys only "
+                        "(iteration count could not be verified).")
+
+    loaded = 0
+    for key, cell in prior.items():
+        if key not in results_matrix:
+            continue  # a cell from a different grid — ignore it
+        m = InferenceMetrics.from_dict(cell)
+        # Heal design-lever metadata from the current payload set (legacy files may lack it).
+        i_key = key.split(" | ")[-1]
+        cell_meta = payload_meta.get(i_key, {})
+        if cell_meta.get("lever") is not None:
+            m.injection_lever = cell_meta.get("lever")
+        if cell_meta.get("target_severity") is not None:
+            m.target_severity = cell_meta.get("target_severity")
+        results_matrix[key] = m
+        loaded += 1
+    return loaded, resumed_from
+
+
+# ---------------------------------------------------------------------------
+# Resilience — live worker membership (heartbeat listener + supervisor)
+# ---------------------------------------------------------------------------
+
+class _HeartbeatProtocol(asyncio.DatagramProtocol):
+    """Receives worker OLLAMA_ALIVE heartbeats and refreshes membership last_seen.
+    A heartbeat from an unknown IP registers a brand-new worker (adopted mid-run by
+    the supervisor)."""
+
+    def __init__(self, registry: Dict[str, WorkerState]):
+        self.registry = registry
+
+    def datagram_received(self, data, addr):
+        if not data.decode("utf-8", "ignore").startswith("OLLAMA_ALIVE"):
+            return
+        ip = addr[0]
+        ws = self.registry.get(ip)
+        if ws is None:
+            self.registry[ip] = WorkerState(ip=ip, last_seen=time.monotonic(), healthy=True)
+        else:
+            ws.last_seen = time.monotonic()
+
+
+async def start_membership_listener(registry: Dict[str, WorkerState], config: BenchmarkConfig):
+    """Bind the discovery port to receive worker heartbeats. Returns the transport
+    (close on shutdown), or None if the port can't be bound — e.g. a worker daemon
+    already owns it on this host — in which case membership still works via the
+    supervisor's periodic discovery probe (see membership_supervisor)."""
+    loop = asyncio.get_running_loop()
+    last_err = None
+    for extra in ({"reuse_port": True}, {}):
+        try:
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _HeartbeatProtocol(registry),
+                local_addr=("0.0.0.0", config.udp_discovery_port),
+                allow_broadcast=True,
+                **extra,
+            )
+            logging.info(f"[membership] Heartbeat listener bound on UDP {config.udp_discovery_port}.")
+            return transport
+        except (OSError, NotImplementedError, ValueError) as e:
+            last_err = e
+    logging.warning(f"[membership] Could not bind UDP {config.udp_discovery_port} for heartbeats "
+                    f"({last_err}); relying on periodic discovery probes only.")
+    return None
+
+
+def spawn_consumers_for(ws: WorkerState, task_queue, results_matrix, config, consumer_tasks) -> None:
+    """Spawn config.concurrency_per_node consumer coroutines bound to one node."""
+    for _ in range(config.concurrency_per_node):
+        consumer_tasks.append(asyncio.create_task(
+            worker_task_consumer(ws.ip, task_queue, results_matrix, config, ws)
+        ))
+    ws.consumers_spawned = True
+
+
+async def probe_workers(config: BenchmarkConfig) -> List[str]:
+    """Re-broadcast discovery quietly (no banner) and return responders. A
+    backward-compatible liveness probe: any worker that replies — heartbeat-capable
+    or a legacy discovery-only daemon — refreshes its last_seen, and unseen nodes
+    are adopted."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, discover_workers_sync, config.udp_discovery_port, config.timeout
+    )
+
+
+def reconcile_registry(registry: Dict[str, WorkerState], responders: List[str],
+                       now: float, config: BenchmarkConfig) -> Tuple[list, list]:
+    """
+    Pure membership reconciliation (no I/O, no task spawning) — the testable core
+    of membership_supervisor.
+
+    Refreshes last_seen for every responder (adding brand-new nodes), then flips
+    health by staleness: a non-master node silent beyond worker_stale_after is
+    evicted; one that became fresh again is rejoined. The master loopback has no
+    daemon (no liveness signal) and is pinned healthy.
+
+    Returns (transitions, to_spawn):
+        transitions — list of (ip, "evicted"|"rejoined") that changed this cycle.
+        to_spawn    — WorkerStates that are healthy but have no consumers yet.
+    """
+    for ip in responders:
+        ws = registry.get(ip)
+        if ws is None:
+            registry[ip] = WorkerState(ip=ip, last_seen=now, healthy=True)
+        else:
+            ws.last_seen = now
+
+    transitions: list = []
+    to_spawn: list = []
+    for ws in list(registry.values()):
+        if not ws.is_master:
+            stale = (now - ws.last_seen) > config.worker_stale_after
+            if stale and ws.healthy:
+                ws.healthy = False
+                transitions.append((ws.ip, "evicted"))
+            elif not stale and not ws.healthy:
+                ws.healthy = True
+                transitions.append((ws.ip, "rejoined"))
+        if ws.healthy and not ws.consumers_spawned:
+            to_spawn.append(ws)
+    return transitions, to_spawn
+
+
+async def membership_supervisor(registry: Dict[str, WorkerState], task_queue,
+                                results_matrix, config: BenchmarkConfig, consumer_tasks) -> None:
+    """
+    Keeps cluster membership live for the whole inference phase:
+      • re-broadcasts discovery each cycle so responders (new or legacy) refresh
+        last_seen and brand-new nodes are adopted mid-run;
+      • evicts a node from dispatch once it goes silent beyond worker_stale_after
+        and rejoins it when signals resume;
+      • spawns consumers for every healthy node still lacking them.
+
+    Health is driven purely by last_seen freshness — refreshed by BOTH the UDP
+    heartbeat listener and this discovery probe — so a stale-heartbeat worker and a
+    legacy reply-only worker are handled identically. The decision logic lives in
+    reconcile_registry (unit-tested); this coroutine only does the I/O around it.
+    """
+    while True:
+        try:
+            responders = await probe_workers(config)
+        except Exception as e:
+            logging.warning(f"[membership] discovery probe failed: {e}")
+            responders = []
+
+        transitions, to_spawn = reconcile_registry(registry, responders, time.monotonic(), config)
+
+        for ip, kind in transitions:
+            if kind == "evicted":
+                logging.warning(
+                    f"[membership] Node {ip} silent > {config.worker_stale_after:.0f}s — "
+                    f"evicted from dispatch; its work moves to healthy nodes."
+                )
+            else:
+                logging.info(f"[membership] Node {ip} responsive again — rejoined the cluster.")
+
+        for ws in to_spawn:
+            spawn_consumers_for(ws, task_queue, results_matrix, config, consumer_tasks)
+            logging.info(f"[membership] Node {ws.ip} joined — spawned "
+                         f"{config.concurrency_per_node} consumer(s).")
+
+        if not task_queue.empty() and not any(ws.healthy for ws in registry.values()):
+            logging.warning(
+                f"[membership] {task_queue.qsize()} tasks pending but NO healthy nodes — "
+                f"waiting for a worker to rejoin (Ctrl-C to stop; resume later with resume=true)."
+            )
+
+        await asyncio.sleep(config.rediscover_interval)
+
+
 async def main(config: BenchmarkConfig):
     """
     Main benchmark run. Sequentially:
-        1. Discovers cluster workers via UDP.
-        2. Builds and enqueues all TaskItems.
-        3. Runs inference across the cluster until the queue is drained.
+        1. Discovers cluster workers via UDP and starts live-membership tracking.
+        2. Builds the grid, resumes prior progress (if resume=True), enqueues the
+           remaining TaskItems.
+        3. Runs inference across the cluster until the queue is drained — workers
+           may drop, rejoin, or newly appear throughout (see membership_supervisor).
         4. Runs the LLM Judge phase (if enabled).
         5. Saves the final results file.
     """
-    cluster_workers = await discover_workers(config.udp_discovery_port, timeout=config.timeout)
+    # Run identity — minted here if the caller (e.g. the server) didn't supply one,
+    # so the provenance sidecar always has a stable id to resume against.
+    if not config.run_id:
+        config.run_id = uuid.uuid4().hex
+    started_at_iso = datetime.now(timezone.utc).isoformat()
+
+    initial_workers = await discover_workers(config.udp_discovery_port, timeout=config.timeout)
+
+    registry: Dict[str, WorkerState] = {}
+    now0 = time.monotonic()
+    for ip in initial_workers:
+        registry[ip] = WorkerState(ip=ip, last_seen=now0, healthy=True)
 
     master_loopback_ip = "127.0.0.1"
-    if not config.exclude_master and master_loopback_ip not in cluster_workers:
+    if not config.exclude_master and master_loopback_ip not in registry:
         logging.info(f"[+] Incorporating Master node ({master_loopback_ip}) into the workforce.")
-        cluster_workers.append(master_loopback_ip)
+        registry[master_loopback_ip] = WorkerState(
+            ip=master_loopback_ip, last_seen=now0, healthy=True, is_master=True
+        )
 
-    if not cluster_workers:
-        logging.warning("[-] No computation nodes available. Aborting.")
-        return
+    if not registry:
+        logging.warning("[-] No computation nodes discovered yet — the supervisor will keep "
+                        "probing; start a worker (start_worker.sh) and it will be adopted.")
 
     system_prompts_dict, injection_payloads_dict = load_all_prompts(
         use_custom=config.use_custom_prompts,
@@ -818,50 +1166,77 @@ async def main(config: BenchmarkConfig):
     # it is NEVER passed to the LLM Judge, which must classify from the [THOUGHT] trace alone.
     payload_meta = load_payload_metadata(use_gen_inj=config.use_generated_injections)
 
-    results_matrix: Dict[str, InferenceMetrics] = {}
-    task_queue = asyncio.Queue()
-    total_tasks = 0
+    results_matrix = build_results_grid(config, system_prompts_dict, injection_payloads_dict, payload_meta)
 
+    # --- RESUME: rehydrate prior progress so only the missing iterations re-run ---
+    resumed_from = None
+    if config.resume:
+        loaded, resumed_from = resume_from_disk(
+            config, results_matrix,
+            list(system_prompts_dict), list(injection_payloads_dict), payload_meta,
+        )
+        if loaded:
+            done_total = sum(m.total_inferences for m in results_matrix.values())
+            logging.info(f"[resume] Rehydrated {loaded} cells from {config.output} "
+                         f"(run {resumed_from}); {done_total} inferences already complete.")
+
+    # --- Enqueue only the remaining iterations per cell ---
+    task_queue = asyncio.Queue()
+    total_planned = 0
+    remaining_tasks = 0
     for model in config.models:
         for s_key, sys_prompt_text in system_prompts_dict.items():
             for i_key, inj_payload_text in injection_payloads_dict.items():
                 matrix_key = f"{model} | {s_key} | {i_key}"
-                cell_meta = payload_meta.get(i_key, {})
-                results_matrix[matrix_key] = InferenceMetrics(
-                    injection_lever=cell_meta.get("lever"),
-                    target_severity=cell_meta.get("target_severity"),
-                )
-
-                for _ in range(config.iterations):
+                done = results_matrix[matrix_key].total_inferences
+                remaining = max(0, config.iterations - done)
+                total_planned += config.iterations
+                for _ in range(remaining):
                     task_queue.put_nowait(TaskItem(
                         model=model,
                         system_key=s_key,
                         injection_key=i_key,
                         system_prompt=sys_prompt_text,
-                        injection_payload=inj_payload_text
+                        injection_payload=inj_payload_text,
                     ))
-                    total_tasks += 1
+                    remaining_tasks += 1
 
-    logging.info(f"\n[*] Cluster formed with {len(cluster_workers)} nodes. Dispatching {total_tasks} inferences...")
+    logging.info(f"\n[*] Dispatching {remaining_tasks} inferences "
+                 f"({total_planned - remaining_tasks} already complete of {total_planned}).")
+
+    # Provenance sidecar (immutable for the run) so a later resume can validate.
+    if config.output:
+        grid_sig = _grid_signature(config.models, list(system_prompts_dict),
+                                   list(injection_payloads_dict), config.iterations)
+        write_provenance(config, config.output, started_at_iso, resumed_from, grid_sig)
 
     # Start the periodic checkpoint background task before launching workers
     # so partial results are saved even if the run is interrupted early.
     checkpoint_task = None
     if config.output:
-        checkpoint_task = asyncio.create_task(periodic_checkpoint(results_matrix, config.output))
+        checkpoint_task = asyncio.create_task(
+            periodic_checkpoint(results_matrix, config.output, config.checkpoint_interval)
+        )
 
-    consumer_tasks = []
-    concurrency_per_node = config.concurrency_per_node
-
-    for worker_ip in cluster_workers:
-        for _ in range(concurrency_per_node):
-            task = asyncio.create_task(
-                worker_task_consumer(worker_ip, task_queue, results_matrix, config)
-            )
-            consumer_tasks.append(task)
+    # Live membership: heartbeat listener refreshes liveness in real time; the
+    # supervisor adopts/evicts/rejoins nodes and spawns their consumers. We also do
+    # an immediate spawn for already-seeded nodes so inference starts without waiting
+    # for the supervisor's first probe.
+    consumer_tasks: List[asyncio.Task] = []
+    for ws in list(registry.values()):
+        spawn_consumers_for(ws, task_queue, results_matrix, config, consumer_tasks)
+    hb_transport = await start_membership_listener(registry, config)
+    supervisor_task = asyncio.create_task(
+        membership_supervisor(registry, task_queue, results_matrix, config, consumer_tasks)
+    )
 
     await task_queue.join()
 
+    supervisor_task.cancel()
+    try:
+        await supervisor_task
+    except asyncio.CancelledError:
+        pass
     for task in consumer_tasks:
         task.cancel()
     if checkpoint_task:
@@ -877,6 +1252,9 @@ async def main(config: BenchmarkConfig):
 
     # --- BATCH EVALUATION PHASE (DISTRIBUTED LLM-AS-A-JUDGE) ---
     if config.use_judge:
+        # Judge on whatever nodes are healthy now (fall back to all known nodes).
+        cluster_workers = [ws.ip for ws in registry.values() if ws.healthy] \
+            or [ws.ip for ws in registry.values()]
         logging.info("\n=========================================")
         logging.info(f"[*] INITIATING DISTRIBUTED JUDGMENT ({config.judge_model})")
         logging.info("=========================================")
@@ -933,6 +1311,9 @@ async def main(config: BenchmarkConfig):
             task.cancel()
 
         logging.info("[+] Distributed judgment complete!")
+
+    if hb_transport is not None:
+        hb_transport.close()
 
     logging.info("\n=========================================")
     logging.info("      FINAL BENCHMARK REPORT             ")

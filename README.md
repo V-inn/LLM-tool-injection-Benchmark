@@ -67,6 +67,16 @@ tests/          pytest suite for the metric / extraction / κ math
 
 Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`.
 
+## Cluster Resilience (Crash-Resume + Live Membership)
+
+Long runs are hardened against the two failures that used to force a restart from zero:
+
+*   **Crash-resume.** The master checkpoints the results matrix to `benchmark_results.json` every `checkpoint_interval` seconds (default 30) alongside a provenance sidecar `benchmark_results.meta.json` (run id + grid signature + config). If the master or its terminal dies, tick **Resume last run** on the Control Center (or set `resume: true` in the config) to continue: the master rehydrates prior progress and re-runs **only the iterations still missing per cell** (`iterations − completed`), instead of the whole grid. A resume whose grid (models / defenses / attacks / iterations) no longer matches the sidecar is refused rather than silently merged.
+*   **Live worker membership.** Discovery is no longer one-shot. Workers broadcast a periodic `OLLAMA_ALIVE` heartbeat and the master re-probes each `rediscover_interval` seconds, keeping a live membership table. New or restarted workers are **adopted mid-run**; a node that goes silent past `worker_stale_after` seconds is **evicted** (its consumers park and its in-flight work is re-queued to healthy nodes instead of burning the retry budget) and **auto-rejoins** the moment its signals return. The master's own loopback node is pinned healthy. If *every* node goes silent the run waits (progress is checkpointed) rather than failing — restart a worker and it resumes, or stop and resume later.
+*   **Honest infra accounting.** A task that exhausts its retries against a connectivity/timeout error is tallied as `infra_error` — a non-scored counter excluded from `total_inferences` and every rate — so an outage never dilutes Immunity/FPR, and that iteration is re-run on the next resume.
+
+Tunables live in `BenchmarkConfig`: `resume`, `checkpoint_interval`, `heartbeat_interval`, `worker_stale_after`, `rediscover_interval`.
+
 ## Installation
 
 ### Prerequisites
@@ -92,9 +102,15 @@ Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `
 Two bash scripts are provided to automatically configure and start the nodes:
 
 1.  **On the Worker Node(s):**
-    Run the worker setup script. This exposes the Ollama server to the network (`0.0.0.0`) and starts the worker daemon.
+    Run the worker setup script. This exposes the Ollama server to the network (`0.0.0.0`) and starts the worker daemon (a UDP discovery responder that also broadcasts a periodic `OLLAMA_ALIVE` heartbeat, plus a restart-on-crash supervisor for Ollama).
     ```bash
-    bash start_worker.sh
+    bash start_worker.sh            # interactive; Ctrl-C to stop
+    bash start_worker.sh --daemon   # detached (setsid+nohup): survives the terminal/SSH session closing; logs to worker.log
+    ```
+    For an always-on worker that also restarts on reboot, install the provided systemd unit (edit `User=`/`WorkingDirectory=` first):
+    ```bash
+    sudo cp deploy/rbac-worker.service /etc/systemd/system/
+    sudo systemctl enable --now rbac-worker   # logs: journalctl -u rbac-worker -f
     ```
 
 2.  **On the Master Node:**

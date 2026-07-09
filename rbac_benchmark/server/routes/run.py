@@ -127,9 +127,19 @@ async def start_run(body: dict):
     if active:
         raise HTTPException(409, f"A benchmark run is already active ({active}). Abort it first.")
 
+    # Mint the run id up-front so it can be threaded INTO the config: the master
+    # persists it in the provenance sidecar (benchmark_results.meta.json), which a
+    # resume run reads back to confirm it is continuing the same run.
+    run_id = str(uuid.uuid4())
+
     cfg = BenchmarkConfig(
         models=models,
         iterations=int(body.get("iterations", 3)),
+        run_id=run_id,
+        # Resume: continue the existing benchmark_results.json, re-running only the
+        # iterations still missing per cell instead of the whole grid from zero.
+        # The master aborts if the grid (models/defenses/attacks/iterations) changed.
+        resume=bool(body.get("resume", False)),
         # 1 = single-shot (toggle off); the UI sends 3 for multi-turn (full ladder).
         max_turns=int(body.get("max_turns", 1)),
         max_retries=int(body.get("max_retries", 2)),
@@ -156,7 +166,6 @@ async def start_run(body: dict):
         output=str(_RESULTS_FILE),
     )
 
-    run_id = str(uuid.uuid4())
     cfg_path = Path(data_path(f"run_config_{run_id}.json"))
     cfg_path.write_text(json.dumps(dataclasses.asdict(cfg), indent=2), encoding="utf-8")
 
