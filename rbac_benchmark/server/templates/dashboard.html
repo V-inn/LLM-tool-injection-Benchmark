@@ -69,7 +69,7 @@
 <!-- Attack validity -->
 <div class="card">
   <div class="card-title">Phase 2 — Attack Validity Check</div>
-  <div class="card-sub" id="validity-sub">Immunity on S1_BASELINE · ref model: —</div>
+  <div class="card-sub" id="validity-sub">Attack strength (break rate) on S1_BASELINE · ref model: —</div>
   <div class="bar-rows" id="validity-bars"></div>
 </div>
 
@@ -138,7 +138,7 @@
 
     // Validity bars
     document.getElementById('validity-sub').textContent =
-      `Immunity on S1_BASELINE · ref model: ${validity.ref_model} · threshold ≤ ${Math.round(validity.threshold * 100)}%`;
+      `Attack strength (break rate) on S1_BASELINE · ref model: ${validity.ref_model} · VALID when ≥ ${Math.round((1 - validity.threshold) * 100)}%`;
     renderValidityBars(document.getElementById('validity-bars'), validity.validity);
 
     // ΔImmunity heatmap
