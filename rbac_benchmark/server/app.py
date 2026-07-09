@@ -96,7 +96,25 @@ def get_models():
         "online": ollama_is_online(),
     }
 
+
+@_sys.get("/cluster")
+def get_cluster():
+    """Live worker-node view for the sidebar (IP + online/offline), tracked by the
+    server's own UDP discovery poller — see server/cluster.py."""
+    return {"nodes": cluster.snapshot()}
+
 app.include_router(_sys, prefix="/api/system", tags=["system"])
+
+
+# ── Background cluster monitor ──────────────────────────────────────────────────
+from rbac_benchmark.server import cluster  # noqa: E402
+
+
+@app.on_event("startup")
+def _start_cluster_monitor():
+    # Start the discovery poller when the ASGI app boots (not on bare import), so
+    # route introspection / tests don't spawn a broadcasting thread.
+    cluster.start()
 
 
 # ── Page routes ────────────────────────────────────────────────────────────────

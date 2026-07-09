@@ -60,6 +60,30 @@ async function refreshClusterStatus() {
 refreshClusterStatus();
 setInterval(refreshClusterStatus, 10000);
 
+// ── Worker nodes (live discovery view) ────────────────────────────────────────
+async function refreshClusterNodes() {
+  const box = document.getElementById('cluster-nodes');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/system/cluster');
+    const d = await r.json();
+    const nodes = d.nodes || [];
+    if (!nodes.length) {
+      box.innerHTML = '<div class="cluster-nodes-empty">no worker nodes yet</div>';
+      return;
+    }
+    // Rebuild the list; a node stays listed once seen and flips green→red offline.
+    box.innerHTML = nodes.map(n => {
+      const cls = n.healthy ? 'online' : 'dead';
+      return `<div class="cluster-node" title="${n.healthy ? 'online' : 'offline'} · ${n.ip}">`
+           + `<span class="cluster-dot ${cls}"></span>`
+           + `<span class="node-ip">${n.ip}</span></div>`;
+    }).join('');
+  } catch (e) { /* leave the last rendered state */ }
+}
+refreshClusterNodes();
+setInterval(refreshClusterNodes, 4000);
+
 // ── Shared fetch helpers ──────────────────────────────────────────────────────
 async function api(path, opts = {}) {
   const res = await fetch(path, {
