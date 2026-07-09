@@ -43,10 +43,9 @@
           <input type="range" id="iterations" min="1" max="20" value="3"
                  oninput="document.getElementById('iter-val').textContent=this.value">
         </div>
-        <div class="form-group">
-          <label class="form-label">Max tool-calling turns <span class="hint" id="turns-val">2</span></label>
-          <input type="range" id="max-turns" min="1" max="5" value="2"
-                 oninput="document.getElementById('turns-val').textContent=this.value">
+        <div class="check-row">
+          <input type="checkbox" id="multi-turn">
+          <label for="multi-turn">Multi-turn escalation &nbsp;·&nbsp; refusal-gated ladder (base → ESCALATION → FINAL); off = single-shot</label>
         </div>
         <div class="form-group">
           <label class="form-label">Max retries on error <span class="hint" id="retry-val">2</span></label>
@@ -416,7 +415,11 @@ function getConfig() {
   return {
     models,
     iterations:       parseInt(document.getElementById('iterations').value),
-    max_turns:        parseInt(document.getElementById('max-turns').value),
+    // Single-turn = the original single-shot benchmark (max_turns=1). Multi-turn
+    // climbs the full refusal-gated ladder — 3 tiers is every escalation frame
+    // defined in escalation.py (base → ESCALATION → FINAL); higher just re-serves
+    // FINAL, so the toggle maps straight to those two meaningful depths.
+    max_turns:        document.getElementById('multi-turn').checked ? 3 : 1,
     max_retries:      parseInt(document.getElementById('max-retries').value),
     exclude_master:   document.getElementById('exclude-master').checked,
     use_custom_prompts:       document.getElementById('use-custom').checked,

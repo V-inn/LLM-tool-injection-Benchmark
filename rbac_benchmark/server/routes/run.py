@@ -130,7 +130,8 @@ async def start_run(body: dict):
     cfg = BenchmarkConfig(
         models=models,
         iterations=int(body.get("iterations", 3)),
-        max_turns=int(body.get("max_turns", 2)),
+        # 1 = single-shot (toggle off); the UI sends 3 for multi-turn (full ladder).
+        max_turns=int(body.get("max_turns", 1)),
         max_retries=int(body.get("max_retries", 2)),
         exclude_master=bool(body.get("exclude_master", False)),
         use_custom_prompts=bool(body.get("use_custom_prompts", True)),
