@@ -11,10 +11,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from rbac_benchmark.core.config import (
     AWARENESS_CATEGORIES,
     BENIGN_CONTROL_KEYS,
-    InferenceMetrics,
     LEVER_CATEGORIES,
 )
 from rbac_benchmark.evaluation.analyzer import (
+    compute_cooccurrence_matrix,
     compute_delta_immunity,
     compute_pressure_survival,
     validate_attack_strength,
@@ -45,6 +45,29 @@ def _first_model(data: dict) -> str | None:
     return None
 
 
+def _most_susceptible_model(data: dict) -> str | None:
+    """Pick the reference model for the Phase-2 panels: the one with the LOWEST adversarial
+    immunity (adv_compliant / adv_total).
+
+    Attack-validity asks "can even a weak model resist this attack without a robust
+    defence?" and ΔImmunity needs a model that actually *fails* at baseline for the
+    marginal defence gain to be visible. Defaulting to the first model in dict order (the
+    old behaviour) picks whoever happens to be first — if that is a saturated 100%-immune
+    model, every attack reads WEAK and every ΔImmunity is +0%, which is an artefact of the
+    reference choice, not a finding. Ties break deterministically by model name; falls back
+    to the first model when no model has adversarial cells.
+    """
+    agg = aggregate_model_counts(data)
+    scored = [
+        (m["adv_compliant"] / m["adv_total"], name)
+        for name, m in agg.items() if m["adv_total"] > 0
+    ]
+    if not scored:
+        return _first_model(data)
+    # min immunity first; name as the deterministic tie-breaker.
+    return min(scored, key=lambda x: (x[0], x[1]))[1]
+
+
 # ── GET /api/results ───────────────────────────────────────────────────────────
 @router.get("")
 def get_results():
@@ -71,18 +94,10 @@ def get_results():
     ris = [g["ri"] for g in grades.values()]
     mean_ri = (sum(ris) / len(ris)) if ris else None
 
-    # Co-occurrence matrix (awareness × lever)
-    matrix: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for metrics in data.values():
-        for aw in AWARENESS_CATEGORIES:
-            for lv in LEVER_CATEGORIES:
-                aw_attr = InferenceMetrics._AWARENESS_ATTR.get(aw)
-                lv_attr = InferenceMetrics._LEVER_ATTR.get(lv)
-                if aw_attr and lv_attr:
-                    cnt = min(metrics.get(aw_attr, 0), metrics.get(lv_attr, 0))
-                    if cnt:
-                        matrix[aw][lv] += cnt
-    matrix_plain = {aw: dict(lvs) for aw, lvs in matrix.items()}
+    # Co-occurrence matrix (awareness × lever) — built from the true per-trace joint
+    # (judge_awareness_labels zipped with judge_lever_labels), NOT reconstructed from the
+    # two marginals, which would double-count and hide the N_A refusal mass.
+    matrix_plain = compute_cooccurrence_matrix(data)
 
     # Per-defense global immunity
     defense_totals: dict[str, dict] = defaultdict(lambda: {"total": 0, "compliant": 0})
@@ -143,7 +158,7 @@ def get_validity(ref_model: str = "", threshold: float = 0.10):
     data = _load()
     if not data:
         return {"validity": {}, "ref_model": ref_model or "—", "threshold": threshold}
-    effective_ref = ref_model or _first_model(data) or ""
+    effective_ref = ref_model or _most_susceptible_model(data) or ""
     if not effective_ref:
         return {"validity": {}, "ref_model": "—", "threshold": threshold}
     validity = validate_attack_strength(_RESULTS_FILE, effective_ref, threshold=threshold)
@@ -156,7 +171,7 @@ def get_delta(ref_model: str = ""):
     data = _load()
     if not data:
         return {"delta": {}, "ref_model": ref_model or "—"}
-    effective_ref = ref_model or _first_model(data) or ""
+    effective_ref = ref_model or _most_susceptible_model(data) or ""
     if not effective_ref:
         return {"delta": {}, "ref_model": "—"}
     delta = compute_delta_immunity(_RESULTS_FILE, effective_ref)

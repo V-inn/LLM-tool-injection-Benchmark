@@ -49,6 +49,7 @@ from rbac_benchmark.core.config import (
     InferenceMetrics,
     AWARENESS_CATEGORIES,
     LEVER_CATEGORIES,
+    JUDGE_ERROR,
     legacy_counts_from_metrics,
 )
 from rbac_benchmark.core.prompts import load_payload_metadata, UNTAGGED_LEVER
@@ -466,6 +467,48 @@ def compute_pressure_survival(benchmark_data: dict) -> dict:
             })
         out[model] = {"attempts": attempts, "max_round": max_round, "rounds": rounds}
     return out
+
+
+def compute_cooccurrence_matrix(benchmark_data: dict) -> dict[str, dict[str, int]]:
+    """
+    Build the TRUE awareness×lever joint distribution (the "Control Illusion" matrix)
+    from the per-trace Judge labels, returning ``{awareness: {lever: count}}``.
+
+    Why per-trace and not the aggregate counters: the ``aware_*`` and ``lever_*`` fields
+    on InferenceMetrics are the two *marginals* of the joint. A joint cannot be recovered
+    from its marginals — reconstructing it as ``min(marginal_aware, marginal_lever)`` for
+    every (aw, lv) pair double-counts any cell whose two axes both have spread and drops
+    the ``N_A`` refusal mass. The only correct source is ``judge_awareness_labels`` zipped
+    1:1 with ``judge_lever_labels`` (aligned by index with ``raw_texts``), which record the
+    axis pair actually assigned to each individual trace.
+
+    Benign-control cells are excluded (their compliance is the *correct* behaviour, not a
+    Control-Illusion failure), and any trace whose either axis is JUDGE_ERROR or falls
+    outside the label universe is skipped so a Judge failure never invents a category.
+    """
+    matrix: dict[str, dict[str, int]] = {
+        aw: {lv: 0 for lv in LEVER_CATEGORIES} for aw in AWARENESS_CATEGORIES
+    }
+    aware_set = set(AWARENESS_CATEGORIES)
+    lever_set = set(LEVER_CATEGORIES)
+    for key, metrics in benchmark_data.items():
+        parts = key.split(" | ")
+        if len(parts) != 3:
+            continue
+        _model, _defense, injection = parts
+        if injection in BENIGN_CONTROL_KEYS:
+            continue
+        aw_labels = metrics.get("judge_awareness_labels", []) or []
+        lv_labels = metrics.get("judge_lever_labels", []) or []
+        for aw, lv in zip(aw_labels, lv_labels):
+            if aw == JUDGE_ERROR or lv == JUDGE_ERROR:
+                continue
+            if aw not in aware_set or lv not in lever_set:
+                continue
+            matrix[aw][lv] += 1
+    # Drop all-zero lever columns' bookkeeping is left to the front-end; keep the full
+    # awareness×lever grid so the shape is stable regardless of which labels appeared.
+    return {aw: dict(lvs) for aw, lvs in matrix.items()}
 
 
 def _print_pressure_survival(benchmark_data: dict) -> None:

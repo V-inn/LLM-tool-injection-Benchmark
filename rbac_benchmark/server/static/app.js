@@ -115,7 +115,7 @@ const AWARENESS_COLORS = {
 const LEVER_SHORT = {
   AUTHORITY:'AUTHORITY', SCARCITY_URGENCY:'SCARCITY', SOCIAL_PROOF:'SOC PROOF',
   RECIPROCITY:'RECIPROCITY', COMMITMENT_CONSISTENCY:'COMMITMENT',
-  LIKING:'LIKING', NONE:'NONE', N_A:'N/A',
+  LIKING:'LIKING', NONE:'NONE', N_A:'REFUSED',
 };
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
@@ -229,21 +229,36 @@ function renderValidityBars(container, validity) {
 // ── Psychological matrix renderer ─────────────────────────────────────────────
 function renderMatrix(container, matrix, awareness_cats, lever_cats) {
   if (!matrix) { container.innerHTML = ''; return; }
-  const levers = lever_cats.filter(l => l !== 'N_A');
-  let maxVal = 0;
-  awareness_cats.forEach(aw => levers.forEach(lv => { maxVal = Math.max(maxVal, (matrix[aw]?.[lv] || 0)); }));
-  if (maxVal === 0) {
+  // Keep persuasion levers on the blue heat scale; the N_A (refusal) column is rendered
+  // last on a separate neutral-gray scale so the large ROBUST_REFUSAL×N_A count does not
+  // blow out the normalization and wash out the (smaller) complier cells.
+  const persuasion = lever_cats.filter(l => l !== 'N_A');
+  const hasNA = lever_cats.includes('N_A');
+  let maxVal = 0, maxNA = 0;
+  awareness_cats.forEach(aw => {
+    persuasion.forEach(lv => { maxVal = Math.max(maxVal, (matrix[aw]?.[lv] || 0)); });
+    if (hasNA) maxNA = Math.max(maxNA, (matrix[aw]?.['N_A'] || 0));
+  });
+  if (maxVal === 0 && maxNA === 0) {
     container.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:11px">No Judge co-occurrence data yet.</p>';
     return;
   }
+  const levers = hasNA ? [...persuasion, 'N_A'] : persuasion;
   const headers = levers.map(lv => `<th>${LEVER_SHORT[lv] || lv}</th>`).join('');
   const rows = awareness_cats.map(aw => {
     const accent = AWARENESS_COLORS[aw] || '#9A9A93';
     const cells = levers.map(lv => {
       const cnt = matrix[aw]?.[lv] || 0;
-      const intensity = cnt / maxVal;
-      const bg = `rgba(47,111,219,${intensity.toFixed(2)})`;
-      const tc = intensity > 0.5 ? '#fff' : '#1A1A19';
+      let bg, tc;
+      if (lv === 'N_A') {
+        const intensity = maxNA ? cnt / maxNA : 0;
+        bg = `rgba(154,154,147,${intensity.toFixed(2)})`;   // neutral gray, own scale
+        tc = intensity > 0.5 ? '#fff' : '#1A1A19';
+      } else {
+        const intensity = maxVal ? cnt / maxVal : 0;
+        bg = `rgba(47,111,219,${intensity.toFixed(2)})`;
+        tc = intensity > 0.5 ? '#fff' : '#1A1A19';
+      }
       return `<td style="background:${bg}"><span style="color:${tc}">${cnt}</span></td>`;
     }).join('');
     return `<tr>
