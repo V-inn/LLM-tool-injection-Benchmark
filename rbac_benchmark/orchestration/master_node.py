@@ -168,7 +168,7 @@ def resolve_model_think(model: str) -> Tuple[str, bool | None]:
     return model, None
 
 
-async def ensure_model_loaded(host: str, model: str, load_timeout: float) -> None:
+async def ensure_model_loaded(loader: AsyncClient, model: str) -> None:
     """
     Warm-up ping: a chat call with an EMPTY messages array, which the Ollama API
     documents as "load the model into memory" — no generation happens, and it
@@ -180,19 +180,28 @@ async def ensure_model_loaded(host: str, model: str, load_timeout: float) -> Non
     request_timeout (Ollama logs 499, aborts the load), and the retry restarted
     the load from scratch — a loop that could never converge.
 
+    `loader` must be a client built with config.model_load_timeout, created once
+    per consumer and reused across tasks: building a fresh AsyncClient here left
+    each warm-up's keep-alive socket to GC timing, accumulating connections on
+    the master and the worker's Ollama over long runs.
+
     Raises on failure; callers run it inside the same try/except so load errors
     flow through the normal classify/retry machinery.
     """
-    loader = AsyncClient(host=host, timeout=load_timeout)
     await loader.chat(model=model, messages=[])
 
 
-async def wait_for_ollama_ready(host: str, window: float = 60.0, interval: float = 2.0) -> bool:
+async def wait_for_ollama_ready(host: str, window: float = 180.0, interval: float = 2.0) -> bool:
     """
     Polls GET {host}/api/version (the cheapest liveness endpoint — no model
     interaction) until Ollama answers 200 or the window closes. Used before
     re-dispatching a task to a worker that reported busy/loading/down, so the
     retry fires into a responsive server instead of instantly failing again.
+
+    The 180s window is sized for a slow Ollama restart (OOM kill + service
+    restart, GPU reset): with a shorter window every task waiting on that node
+    fell through to normal retry accounting and burned its retry budget on
+    infrastructure downtime rather than real failures.
 
     Note: a 200 here means the HTTP server is up, not that the model finished
     loading — but a chat request sent during a load simply blocks until the
@@ -529,6 +538,9 @@ async def worker_task_consumer(
     """
     node_host = f"http://{worker_ip}:{config.ollama_port}"
     client = AsyncClient(host=node_host, timeout=config.request_timeout)
+    # Same endpoint, longer clock: warm-up loads get model_load_timeout instead of
+    # request_timeout. One loader per consumer — see ensure_model_loaded.
+    loader = AsyncClient(host=node_host, timeout=config.model_load_timeout)
 
     while True:
         try:
@@ -543,7 +555,7 @@ async def worker_task_consumer(
         try:
             # Warm-up first (near-instant if the model is already resident) so the
             # inference calls below never pay the cold-load inside their own timeout.
-            await ensure_model_loaded(node_host, ollama_model, config.model_load_timeout)
+            await ensure_model_loaded(loader, ollama_model)
 
             # The trajectory runner owns the whole escalate-and-persist loop; its only
             # I/O is this chat closure, which keeps model/tools/think fixed for the attempt.
@@ -599,7 +611,10 @@ async def worker_task_consumer(
                     f"run `ollama pull {ollama_model}` on that machine. Details: {e}"
                 )
             else:
-                logging.error(f"[!] Connection/runtime error on node {worker_ip}. Details: {e}")
+                # type(e).__name__ is load-bearing: httpx timeout exceptions often
+                # stringify to "", which used to log an empty "Details:" line and
+                # made timeouts indistinguishable from other runtime failures.
+                logging.error(f"[!] Connection/runtime error on node {worker_ip}. Details: {type(e).__name__}: {e}")
 
             # Busy/loading (500 'llm server loading model', 503 'server busy') and
             # dropped connections are the worker's state, not the task's fault:
@@ -664,7 +679,8 @@ async def judge_worker_consumer(
     # load here (with the long load timeout) keeps it out of the first judgment's
     # request_timeout. Failures are non-fatal — tasks retry individually below.
     try:
-        await ensure_model_loaded(node_host, config.judge_model, config.model_load_timeout)
+        loader = AsyncClient(host=node_host, timeout=config.model_load_timeout)
+        await ensure_model_loaded(loader, config.judge_model)
     except Exception as e:
         logging.warning(f"[!] Judge model warm-up failed on {worker_ip} (continuing): {e}")
 
@@ -709,7 +725,9 @@ async def judge_worker_consumer(
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logging.error(f"[!] Judge error on node {worker_ip}. Details: {e}")
+            # type(e).__name__ for the same reason as the inference consumer:
+            # httpx timeout exceptions often stringify to an empty message.
+            logging.error(f"[!] Judge error on node {worker_ip}. Details: {type(e).__name__}: {e}")
             if retries < MAX_JUDGE_RETRIES:
                 # If the node is merely busy loading the judge model (or briefly
                 # down), wait for it to answer again before the retry fires —
@@ -736,7 +754,14 @@ async def periodic_checkpoint(results_matrix: Dict[str, InferenceMetrics], outpu
     while True:
         await asyncio.sleep(interval_seconds)
         if output_path:
-            save_results_to_disk(results_matrix, output_path, is_checkpoint=True)
+            # Serialise off the event loop: asdict + json.dump of a large matrix
+            # (thousands of thinking traces late in a run) can block for whole
+            # seconds, and asyncio deadlines keep ticking while the loop is
+            # frozen — every in-flight request lost that slice of its
+            # request_timeout budget. Consumers may append during the snapshot;
+            # a checkpoint torn by a few entries is acceptable (the final save
+            # runs after queue.join(), when nothing is mutating).
+            await asyncio.to_thread(save_results_to_disk, results_matrix, output_path, True)
 
 
 def save_results_to_disk(
