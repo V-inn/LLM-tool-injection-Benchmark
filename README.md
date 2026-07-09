@@ -107,12 +107,7 @@ Two bash scripts are provided to automatically configure and start the nodes:
     bash start_worker.sh            # interactive; Ctrl-C to stop
     bash start_worker.sh --daemon   # detached (setsid+nohup): survives the terminal/SSH session closing; logs to $TMPDIR/rbac_worker.log
     ```
-    **`start_worker.sh` is fully self-contained** — the worker daemon is embedded in the script (stdlib-only Python, materialised to a temp file at launch). Copy just this one file to a worker machine (USB stick, `scp`, …); it needs only `ollama` and `python3`, **no repository checkout and no `pip install`**.
-    For an always-on worker that also restarts on reboot, install the provided systemd unit (edit `User=`/`WorkingDirectory=` first):
-    ```bash
-    sudo cp deploy/rbac-worker.service /etc/systemd/system/
-    sudo systemctl enable --now rbac-worker   # logs: journalctl -u rbac-worker -f
-    ```
+    **`start_worker.sh` is fully self-contained** — the worker daemon is embedded in the script (stdlib-only Python, materialised to a temp file at launch). Copy just this one file to a worker machine (USB stick, `scp`, …); it needs only `ollama` and `python3`, **no repository checkout and no `pip install`**. Use `--daemon` (or wrap it in your own systemd/service unit) for an always-on worker.
 
 2.  **On the Master Node:**
     Run the master setup script. This starts Ollama locally and launches the web UI.

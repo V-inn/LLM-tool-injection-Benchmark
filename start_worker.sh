@@ -28,9 +28,9 @@
 #   bash start_worker.sh            # interactive (foreground); Ctrl-C to stop
 #   bash start_worker.sh --daemon   # detached; survives terminal close, logs to a file
 #
-# For an always-on worker that also survives reboots, install the systemd unit
-# from the repo (deploy/rbac-worker.service) — but that is optional and NOT needed
-# for the standalone USB-stick workflow.
+# For an always-on worker that also survives reboots, run with --daemon or wrap
+# this script in your own systemd/service unit — optional and NOT needed for the
+# standalone USB-stick workflow.
 #
 # CONFIG (environment)
 # ====================
