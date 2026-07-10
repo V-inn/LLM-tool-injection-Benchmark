@@ -31,7 +31,6 @@ router = APIRouter()
 
 _INJECTIONS_FILE = data_path("generated_injections.json")
 _RESULTS_FILE    = data_path("benchmark_results.json")
-_PROMPTS_FILE    = data_path("custom_prompts.json")
 
 
 def _load_json(path: str) -> dict | list | None:
@@ -206,11 +205,11 @@ async def generate_defenses(body: dict):
         raw = _load_json(_DEFENSES_FILE)
         if not isinstance(raw, dict):
             raise HTTPException(500, "defense_generator returned unexpected output")
-        defenses = [{"key": k, "name": k, "text": v, "system_prompt": v} for k, v in raw.items()]
-        existing = _load_json(_PROMPTS_FILE) or {}
-        for d in defenses:
-            existing[d["key"]] = {"name": d["name"], "system_prompt": d["text"], "levers": levers or []}
-        Path(_PROMPTS_FILE).write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+        # No mirror into custom_prompts.json: the Custom Prompts tab now lists
+        # generated_defenses.json directly (source="generated"), so a second copy would
+        # only duplicate the row and trip the load-time collision warning.
+        defenses = [{"key": k, "name": k, "text": v, "system_prompt": v}
+                    for k, v in raw.items() if not k.startswith("_disabled:")]
         return {"defenses": defenses, "count": len(defenses)}
     except Exception as e:
         raise HTTPException(500, str(e))

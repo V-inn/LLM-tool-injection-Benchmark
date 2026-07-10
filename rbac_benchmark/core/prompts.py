@@ -365,6 +365,28 @@ def _payload_meta(value) -> dict:
     return {"lever": UNTAGGED_LEVER, "target_severity": None}
 
 
+def _defense_text(value) -> str:
+    """Return a defense system prompt's text whether it is stored as a bare string
+    (generated_defenses.json / legacy) or a {'name', 'system_prompt', 'levers'} object
+    (custom_prompts.json, written by the Custom Prompts editor and the defense generator).
+    Normalising here keeps every prompt source feeding plain strings into the matrix — the
+    loader previously merged the custom dict object in verbatim, which is not a usable prompt."""
+    if isinstance(value, dict):
+        return value.get("system_prompt") or value.get("text") or ""
+    return value
+
+
+def _ensure_cot(prompt_text: str) -> str:
+    """Guarantee a defense prompt carries the [THOUGHT] directive so it always emits a trace
+    the Judge can score. The base prompts hardcode COT_SUFFIX; this applies the same rule to
+    every generated/custom prompt at load time, so no prompt source can silently disable
+    Chain-of-Thought. Idempotent: a prompt already containing the '[THOUGHT]:' cue is returned
+    unchanged, so a directive is never duplicated."""
+    if not isinstance(prompt_text, str) or not prompt_text.strip():
+        return prompt_text
+    return prompt_text if "[THOUGHT]:" in prompt_text else prompt_text + COT_SUFFIX
+
+
 def _safe_update(base: Dict[str, str], updates: Dict[str, str], source_label: str) -> None:
     """
     Merges `updates` into `base` in place, emitting a warning for any key collision.
@@ -425,7 +447,14 @@ def load_all_prompts(
         if generated_defenses_file.exists():
             try:
                 with open(generated_defenses_file, "r", encoding="utf-8") as f:
-                    _safe_update(system_prompts, json.load(f), "generated_defenses.json")
+                    raw_defenses = json.load(f)
+                # Normalise to plain text and append the [THOUGHT] directive if absent, so a
+                # generated defense always produces a scorable trace (see _ensure_cot). Keys
+                # prefixed "_disabled:" were toggled off in the Custom Prompts UI — kept in the
+                # file but excluded from the live matrix.
+                normalised = {k: _ensure_cot(_defense_text(v)) for k, v in raw_defenses.items()
+                              if not k.startswith("_disabled:")}
+                _safe_update(system_prompts, normalised, "generated_defenses.json")
             except Exception as e:
                 print(f"[-] Warning: Failed to parse generated_defenses.json. Error: {e}")
 
@@ -434,7 +463,14 @@ def load_all_prompts(
         if custom_prompts_file.exists():
             try:
                 with open(custom_prompts_file, "r", encoding="utf-8") as f:
-                    _safe_update(system_prompts, json.load(f), "custom_prompts.json")
+                    raw_custom = json.load(f)
+                # Custom entries are {name, system_prompt, levers} objects (or legacy bare
+                # strings); pull out the prompt text and enforce the [THOUGHT] directive, the
+                # same guarantee the base and generated prompts get. "_disabled:"-prefixed keys
+                # are toggled-off prompts and are excluded from the live matrix.
+                normalised = {k: _ensure_cot(_defense_text(v)) for k, v in raw_custom.items()
+                              if not k.startswith("_disabled:")}
+                _safe_update(system_prompts, normalised, "custom_prompts.json")
             except Exception as e:
                 print(f"[-] Warning: Failed to parse custom_prompts.json. Error: {e}")
 

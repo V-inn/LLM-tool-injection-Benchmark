@@ -86,7 +86,8 @@ function renderList() {
   <div class="prompt-card-header">
     <span class="prompt-dot ${dotClass}"></span>
     <span class="prompt-name">${escHtml(p.name || p.key)}</span>
-    <span class="prompt-status" style="color:${p.disabled ? '#9A9A93' : '#1E8A5B'}">${statusLabel}</span>
+    ${p.source === 'generated' ? '<span class="chip chip-def" style="margin-left:2px">generated</span>' : ''}
+    <span class="prompt-status" style="color:${p.disabled ? '#9A9A93' : '#1E8A5B'};margin-left:auto">${statusLabel}</span>
   </div>
   <div class="prompt-preview">${escHtml(preview)}${preview.length < charCount ? '…' : ''}</div>
   <div class="prompt-footer">
