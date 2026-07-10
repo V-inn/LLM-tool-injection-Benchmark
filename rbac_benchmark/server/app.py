@@ -91,6 +91,22 @@ app = FastAPI(title="LLM Red Team Benchmark", docs_url="/api/docs")
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
+
+def static_url(rel_path: str) -> str:
+    """Cache-busting static URL: appends ?v=<file mtime> so a git pull that
+    changes theme.css/app.js/charts.js forces browsers to refetch. Without it,
+    a pull updates the server-rendered HTML but the browser keeps serving the
+    stale cached CSS/JS — new markup styled by old rules (unstyled stacked text)."""
+    p = _HERE / "static" / rel_path.lstrip("/")
+    try:
+        ver = int(p.stat().st_mtime)
+    except OSError:
+        ver = 0
+    return f"/static/{rel_path.lstrip('/')}?v={ver}"
+
+
+templates.env.globals["static_url"] = static_url
+
 # ── Import routers (registered below after definitions) ────────────────────────
 from rbac_benchmark.server.routes import run, results, prompts, payloads, kappa  # noqa: E402
 
