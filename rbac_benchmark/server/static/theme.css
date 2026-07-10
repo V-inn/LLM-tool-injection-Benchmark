@@ -462,7 +462,15 @@ input[type="checkbox"] { accent-color: var(--signal); width: 15px; height: 15px;
 .thought-axis { display: flex; align-items: center; gap: 8px; }
 .thought-axis-label { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }
 .thought-awareness { font-family: var(--font-mono); font-size: 10px; font-weight: 500; }
-.thought-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.thought-nav { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; }
+/* Centered jump-to-trace input between the Older/Newer buttons */
+.thought-jump {
+  width: 68px; text-align: center;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  padding: 8px 6px; color: var(--signal);
+}
+.thought-jump::-webkit-inner-spin-button,
+.thought-jump::-webkit-outer-spin-button { opacity: .4; }
 
 /* ── κ header card ─────────────────────────────────────────────────────────── */
 .kappa-header { display: flex; align-items: flex-start; gap: 24px; }

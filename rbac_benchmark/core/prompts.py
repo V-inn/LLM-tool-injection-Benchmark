@@ -411,8 +411,11 @@ def load_all_prompts(
                 # Normalise both the legacy {key: str} and the tagged
                 # {key: {text, lever, target_severity}} shapes down to {key: text}, so
                 # every existing consumer keeps receiving plain strings. The lever/severity
-                # tags are read separately by load_payload_metadata().
-                normalised = {k: _payload_text(v) for k, v in raw_injections.items()}
+                # tags are read separately by load_payload_metadata(). Keys prefixed with
+                # "_disabled:" are payloads the operator toggled off in the Payload Gen UI —
+                # they stay in the file but are excluded from the live attack matrix.
+                normalised = {k: _payload_text(v) for k, v in raw_injections.items()
+                              if not k.startswith("_disabled:")}
                 _safe_update(injection_payloads, normalised, "generated_injections.json")
             except Exception as e:
                 print(f"[-] Warning: Failed to parse generated_injections.json. Error: {e}")
@@ -459,6 +462,8 @@ def load_payload_metadata(use_gen_inj: bool = True) -> Dict[str, dict]:
                 with open(generated_injections_file, "r", encoding="utf-8") as f:
                     raw_injections = json.load(f)
                 for key, value in raw_injections.items():
+                    if key.startswith("_disabled:"):
+                        continue  # toggled-off payload — not part of the live matrix
                     meta[key] = _payload_meta(value)
             except Exception as e:
                 print(f"[-] Warning: Failed to parse generated_injections.json metadata. Error: {e}")

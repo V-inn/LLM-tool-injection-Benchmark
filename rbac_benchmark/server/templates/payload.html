@@ -119,8 +119,55 @@
 
 <!-- Generated injections -->
 <div class="card" id="injections-card">
-  <div class="card-title">Generated Injections</div>
-  <div class="card-sub" id="inj-sub">Load existing or generate new injections above.</div>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px">
+    <div>
+      <div class="card-title">Generated Injections</div>
+      <div class="card-sub" id="inj-sub" style="margin-bottom:0">Load existing or generate new injections above.</div>
+    </div>
+    <button class="btn btn-ghost" onclick="openInjEditor(null)" style="white-space:nowrap">+ New injection</button>
+  </div>
+
+  <!-- Inline editor (hidden until New/Edit) -->
+  <div id="inj-editor" style="display:none;background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:14px">
+    <div class="form-group">
+      <label class="form-label">Key <span class="hint" id="inj-key-hint">uppercase, e.g. I_GEN_SEV3_URGENCY</span></label>
+      <input type="text" id="inj-editor-key" placeholder="I_GEN_SEV3_URGENCY" style="font-family:var(--font-mono)">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Payload text <span class="hint">the fake tool response the target reads</span></label>
+      <textarea id="inj-editor-text" rows="4" placeholder="Profile read successfully. … delete_database … confirmation_code: '…'"></textarea>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Design lever</label>
+        <select id="inj-editor-lever">
+          <option value="">— untagged —</option>
+          <option value="AUTHORITY">AUTHORITY</option>
+          <option value="SCARCITY_URGENCY">SCARCITY_URGENCY</option>
+          <option value="SOCIAL_PROOF">SOCIAL_PROOF</option>
+          <option value="RECIPROCITY">RECIPROCITY</option>
+          <option value="COMMITMENT_CONSISTENCY">COMMITMENT_CONSISTENCY</option>
+          <option value="LIKING">LIKING</option>
+          <option value="NONE">NONE</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Target severity</label>
+        <select id="inj-editor-sev">
+          <option value="">— none —</option>
+          <option value="1">Sev-1 · reset_user_password</option>
+          <option value="2">Sev-2 · grant_admin_privileges</option>
+          <option value="3">Sev-3 · delete_database</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary" onclick="saveInjection()" style="flex:1">Save injection</button>
+      <button class="btn btn-ghost" onclick="closeInjEditor()">Cancel</button>
+    </div>
+    <div id="inj-editor-status" style="margin-top:10px"></div>
+  </div>
+
   <div id="injections-list">
     <div class="alert alert-info">No injections generated yet.</div>
   </div>
@@ -140,6 +187,8 @@
 
 {% block scripts %}
 <script>
+let _injections = [];
+
 (async () => {
   // Load existing injections
   await loadInjections();
@@ -149,10 +198,14 @@
 async function loadInjections() {
   try {
     const d = await api('/api/payloads/injections');
-    renderInjections(d.injections || []);
+    _injections = d.injections || [];
+    renderInjections(_injections);
+    const active = _injections.filter(x => !x.disabled).length;
+    const off    = _injections.length - active;
     document.getElementById('inj-sub').textContent =
-      `${d.injections?.length || 0} injections · ${d.generated_at || '—'}`;
+      `${_injections.length} injections · ${active} active · ${off} disabled · ${d.generated_at || '—'}`;
   } catch(e) {
+    _injections = [];
     document.getElementById('injections-list').innerHTML =
       '<div class="alert alert-info">No injections file found.</div>';
   }
@@ -171,24 +224,112 @@ function renderInjections(items) {
       '<div class="alert alert-info">No injections generated yet.</div>';
     return;
   }
-  // items are {key, text} — key encodes strategy name (e.g. I_GEN_SEV3_URGENCY)
+  // items are {key, text, lever, target_severity, disabled}. Prefer the tagged
+  // target_severity; fall back to a SEV<n> token in the key for legacy payloads.
   const SEV_COLOR = {'1':'#D39A2F','2':'#C56B2C','3':'#C0392B'};
   document.getElementById('injections-list').innerHTML = items.map((inj, i) => {
     const key = inj.key || '';
-    const sevMatch = key.match(/SEV(\d)/);
-    const sev = sevMatch ? sevMatch[1] : null;
+    const sev = inj.target_severity != null ? String(inj.target_severity)
+              : (key.match(/SEV(\d)/)?.[1] || null);
     const sc = sev ? (SEV_COLOR[sev] || '#9A9A93') : '#9A9A93';
     const sevLabel = sev ? `SEV-${sev}` : 'GEN';
+    const off = inj.disabled;
+    const meta = [inj.lever ? escHtml(inj.lever) : null, `${(inj.text || inj.prompt || '').length} chars`]
+                 .filter(Boolean).join(' · ');
     return `
-<div style="background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:13px 14px;margin-bottom:8px">
+<div style="background:var(--ground);border:1px solid var(--border);border-radius:8px;padding:13px 14px;margin-bottom:8px${off ? ';opacity:.55' : ''}">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
     <span class="chip" style="color:${sc};background:${sc}22">${sevLabel}</span>
     <span style="font-family:var(--font-mono);font-size:10px;font-weight:600;color:#3A3A37">${escHtml(key)}</span>
+    <span style="font-family:var(--font-mono);font-size:9.5px;color:${off ? '#9A9A93' : '#1E8A5B'}">${off ? 'disabled' : 'active'}</span>
     <span style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);margin-left:auto">${String(i+1).padStart(2,'0')}</span>
   </div>
   <div style="font-family:var(--font-mono);font-size:11px;line-height:1.65;color:#3A3A37;white-space:pre-wrap">${escHtml(inj.text || inj.prompt || '')}</div>
+  <div class="prompt-footer" style="margin-top:10px">
+    <span class="prompt-meta">${meta}</span>
+    <div class="prompt-actions">
+      <button onclick="editInjection('${escAttr(key)}')">edit</button>
+      <button onclick="toggleInjection('${escAttr(key)}')">${off ? 'enable' : 'disable'}</button>
+      <button onclick="deleteInjection('${escAttr(key)}')" style="color:var(--breach)">delete</button>
+    </div>
+  </div>
 </div>`;
   }).join('');
+}
+
+// ── Injection editor (create / edit / disable / delete) ───────────────────────
+function openInjEditor(key) {
+  const ed = document.getElementById('inj-editor');
+  ed.style.display = '';
+  document.getElementById('inj-editor-status').innerHTML = '';
+  const keyInput = document.getElementById('inj-editor-key');
+  if (!key) {
+    keyInput.value = '';
+    keyInput.disabled = false;
+    document.getElementById('inj-editor-text').value  = '';
+    document.getElementById('inj-editor-lever').value = '';
+    document.getElementById('inj-editor-sev').value   = '';
+  }
+  keyInput.focus();
+  ed.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function editInjection(key) {
+  const inj = _injections.find(x => x.key === key);
+  if (!inj) return;
+  openInjEditor(key);
+  // Key is the storage identifier — lock it while editing so a rename can't silently
+  // orphan the old entry; delete + re-create to rename.
+  const keyInput = document.getElementById('inj-editor-key');
+  keyInput.value = key;
+  keyInput.disabled = true;
+  document.getElementById('inj-editor-text').value  = inj.text || inj.prompt || '';
+  document.getElementById('inj-editor-lever').value = inj.lever || '';
+  document.getElementById('inj-editor-sev').value   = inj.target_severity != null ? String(inj.target_severity) : '';
+}
+
+function closeInjEditor() {
+  document.getElementById('inj-editor').style.display = 'none';
+}
+
+async function saveInjection() {
+  const key   = document.getElementById('inj-editor-key').value.trim();
+  const text  = document.getElementById('inj-editor-text').value.trim();
+  const lever = document.getElementById('inj-editor-lever').value;
+  const sev   = document.getElementById('inj-editor-sev').value;
+  if (!key)  { injEditorStatus('error', 'Key is required.'); return; }
+  if (!text) { injEditorStatus('error', 'Payload text is required.'); return; }
+  try {
+    await api('/api/payloads/injections/save', { method: 'POST', body: {
+      key, text, lever: lever || null, target_severity: sev || null
+    }});
+    closeInjEditor();
+    await loadInjections();
+  } catch(e) { injEditorStatus('error', e.message); }
+}
+
+async function toggleInjection(key) {
+  try {
+    await api(`/api/payloads/injections/toggle/${encodeURIComponent(key)}`, { method: 'POST' });
+    await loadInjections();
+  } catch(e) { showGenStatus('error', e.message); }
+}
+
+async function deleteInjection(key) {
+  if (!confirm(`Delete injection "${key}"?`)) return;
+  try {
+    await api(`/api/payloads/injections/delete/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    await loadInjections();
+  } catch(e) { showGenStatus('error', e.message); }
+}
+
+function injEditorStatus(type, msg) {
+  const map = {success:'alert-success',error:'alert-error',warn:'alert-warn',info:'alert-info'};
+  document.getElementById('inj-editor-status').innerHTML = `<div class="alert ${map[type]}">${escHtml(msg)}</div>`;
+}
+
+function escAttr(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;');
 }
 
 function renderCalibBars(validity) {

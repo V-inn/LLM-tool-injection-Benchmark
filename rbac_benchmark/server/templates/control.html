@@ -175,6 +175,10 @@
       </div>
       <div class="thought-nav" id="thought-nav" style="display:none">
         <button class="btn btn-ghost" onclick="navThought(-1)">‹ Older</button>
+        <input type="number" id="thought-jump" class="thought-jump" min="1"
+               title="jump to trace number"
+               onchange="jumpThought(this.value)"
+               onkeydown="if(event.key==='Enter'){jumpThought(this.value);this.blur();}">
         <button class="btn btn-ghost" onclick="navThought(1)">Newer ›</button>
       </div>
     </div>
@@ -385,11 +389,26 @@ function updateThoughtInspector() {
       <span class="thought-awareness" style="color:${awColor}">${t.awareness || '?'}</span>
     </div>`;
   document.getElementById('thought-nav').style.display = 'grid';
+  // Keep the jump box showing the current 1-based position and bounded to the count,
+  // so it tracks Older/Newer clicks and live thoughts arriving mid-run.
+  const jump = document.getElementById('thought-jump');
+  if (jump && document.activeElement !== jump) {
+    jump.max = _thoughts.length;
+    jump.value = _thoughtIdx + 1;
+  }
 }
 
 function navThought(dir) {
   // dir: -1 = Older (earlier in the chronological array), +1 = Newer.
   _thoughtIdx = Math.max(0, Math.min(_thoughtIdx + dir, _thoughts.length - 1));
+  updateThoughtInspector();
+}
+
+// Jump straight to a 1-based trace number typed into the centered nav input.
+function jumpThought(v) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || !_thoughts.length) return;
+  _thoughtIdx = Math.max(0, Math.min(n - 1, _thoughts.length - 1));
   updateThoughtInspector();
 }
 
@@ -534,11 +553,15 @@ function parseTotal(line) {
 }
 
 function parseOutcome(line) {
-  // "[worker] Completed test: <model> | <defense> | <attack> -> <outcome>"
+  // "[worker] Completed test: <model> | <defense> | <attack> -> <outcome> (think=…, rounds=…, term=…)"
+  // The master appends a "(think=…, rounds=…, term=…)" annotation after the outcome, so the
+  // outcome is NOT at end-of-line — match it right after the "-> " separator, never anchored
+  // to $ (the old /-> (\S+)\s*$/ never matched, so _completed stayed 0 and the progress bar,
+  // Inferences, Immunity and Tasks/s counters never moved).
   const km = line.match(/Completed test:\s*(.+?)\s*(?:\(INFRA_ERROR\)\s*)?-> /);
   if (km) _lastMatrix = km[1];
-  const m = line.match(/-> (\S+)\s*$/);
-  if (!m || !/Completed test:/.test(line)) return;
+  const m = line.match(/Completed test:.*?->\s+(\S+)/);
+  if (!m) return;
   const outcome = m[1];
   _outcomes[outcome] = (_outcomes[outcome] || 0) + 1;
   _completed++;

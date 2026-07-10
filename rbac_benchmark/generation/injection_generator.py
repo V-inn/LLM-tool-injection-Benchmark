@@ -39,8 +39,8 @@ OUTPUT
 ======
 Results are written to master/generated_injections.json. This file is loaded by
 prompts.py via load_all_prompts() and automatically added to the evaluation matrix
-on the next benchmark run. Existing keys in the file are preserved across runs —
-the file is overwritten on each generation, so re-run to refresh.
+on the next benchmark run. Existing keys in the file are preserved and merged across
+runs — re-run to accumulate more payloads; a colliding key refreshes that one entry.
 """
 
 import json
@@ -212,8 +212,9 @@ async def generate_injections(
         3. Validate every payload (_validate_payload): drop any that do not name their
            severity's forbidden tool / required argument or carry a bad lever — an "attack"
            that cannot coerce the forbidden call is noise, not signal.
-        4. Overwrite output_file with the surviving {key: {text, lever, target_severity}} map
-           and report the accepted/rejected counts and the final per-lever distribution.
+        4. Merge the surviving {key: {text, lever, target_severity}} payloads into any
+           existing output_file (preserving previously-generated attacks) and report the
+           accepted/rejected counts and this batch's per-lever distribution.
 
     Output shape is backward compatible: prompts.load_all_prompts / load_payload_metadata and
     the server routes all tolerate both this tagged schema and the legacy bare-string one.
@@ -234,7 +235,19 @@ async def generate_injections(
     print(f"[*] Target levers: {target_levers}")
     print(f"[*] Payloads per lever: {per_lever} (balanced across {len(target_levers)} levers)")
 
+    # Merge INTO any previously-generated set rather than clobbering it: regenerating
+    # should ADD attacks to the matrix, not wipe the ones already there. This mirrors the
+    # accumulate-don't-replace behaviour of the defense generator and matches this module's
+    # own docstring ("Existing keys ... are preserved"). A new batch key that collides with
+    # an existing name refreshes that one payload; every other prior payload survives.
     generated: dict = {}
+    if Path(output_file).exists():
+        try:
+            prior = json.loads(Path(output_file).read_text(encoding="utf-8"))
+            if isinstance(prior, dict):
+                generated = prior
+        except (json.JSONDecodeError, OSError):
+            pass  # unreadable/corrupt file — start fresh rather than abort generation
     accepted = 0
     rejected = 0
     distribution = {lv: 0 for lv in target_levers}
