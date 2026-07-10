@@ -58,69 +58,85 @@ function renderRadar(canvasId, grades, dotColors) {
   });
 }
 
-// ── Pressure-survival curve (multi-turn) ──────────────────────────────────────
-// survival: { model: { attempts, max_round, rounds: [{round, immunity_pct, broke_here, delivered}] } }
-function renderSurvivalCurve(canvasId, survival, dotColors) {
-  destroyChart(canvasId);
-  const canvas = document.getElementById(canvasId);
-  if (!canvas || !survival || !Object.keys(survival).length) return;
+// ── Pressure-survival attrition bars (multi-turn) ─────────────────────────────
+// survival: { model: { attempts, max_round, rounds: [{round, delivered, broke_here,
+//                                                      broke_cumulative, immunity_pct}] } }
+//
+// A 3-point line implied smooth interpolation between rounds that never happened —
+// nothing occurs "between" round 1 and 2, and a tension curve over so few points
+// reads as noise. Each model's cohort is instead one full-width bar: warm segments
+// mark the share that cracked AT each round (deepest red = folded under the first,
+// mildest pressure), and the green tail is the share that held to the final round.
+// The bars align at round 1, so the eye tracks how deep into the gauntlet each
+// model survived — the temporal story the leaderboard's single Immunity % can't tell.
+const SURVIVAL_HELD_COLOR = '#1E8A5B';
 
-  const colors = dotColors || ['#2F6FDB','#7C5CD6','#2F9E6B','#D39A2F','#D0533F','#9A9A93'];
+// Round r of maxRound → warm colour. Round 1 (folded first) is the deepest red;
+// the last round fades to amber. Ramps through the same palette as the Sev ladder.
+function pressureColor(round, maxRound) {
+  const stops = [[192, 57, 43], [197, 107, 44], [211, 154, 47]]; // #C0392B #C56B2C #D39A2F
+  if (maxRound <= 1) return `rgb(${stops[0].join(',')})`;
+  const seg = ((round - 1) / (maxRound - 1)) * (stops.length - 1);
+  const i = Math.min(Math.floor(seg), stops.length - 2);
+  const f = seg - i;
+  const c = stops[i].map((a, k) => Math.round(a + (stops[i + 1][k] - a) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function renderSurvivalCurve(containerId, survival, dotColors) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!survival || !Object.keys(survival).length) { el.innerHTML = ''; return; }
+
+  const colors = dotColors || ['#2F6FDB', '#7C5CD6', '#2F9E6B', '#D39A2F', '#D0533F', '#9A9A93'];
   const maxRound = Math.max(...Object.values(survival).map(s => s.max_round));
-  const labels = Array.from({ length: maxRound }, (_, i) => `Round ${i + 1}`);
 
-  const datasets = Object.entries(survival).map(([model, s], idx) => {
-    const byRound = {};
-    s.rounds.forEach(r => { byRound[r.round] = r; });
-    // Carry the last known immunity forward across rounds this model never reached,
-    // so a model that stopped escalating early plots as a flat (still-immune) line
-    // instead of dropping to null mid-chart.
-    let last = 100;
-    const data = labels.map((_, i) => {
-      const row = byRound[i + 1];
-      if (row) last = row.immunity_pct;
-      return Math.round(last * 10) / 10;
-    });
-    const color = colors[idx % colors.length];
-    return {
-      label: model, data,
-      borderColor: color, backgroundColor: color + '22',
-      borderWidth: 2, pointRadius: 3, pointBackgroundColor: color, tension: 0.2,
-      _rounds: byRound,
-    };
-  });
+  // Strongest cohort first: rank by the share that held to the end.
+  const ordered = Object.entries(survival).sort(
+    (a, b) => (b[1].rounds.at(-1)?.immunity_pct ?? 0) - (a[1].rounds.at(-1)?.immunity_pct ?? 0)
+  );
 
-  _charts[canvasId] = new Chart(canvas, {
-    type: 'line',
-    data: { labels, datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: {
-        y: {
-          min: 0, max: 100,
-          title: { display: true, text: 'Immunity remaining (%)', font: { family: FONT_MONO, size: 10 }, color: '#9A9A93' },
-          ticks: { stepSize: 25, font: { family: FONT_MONO, size: 9 }, color: '#9A9A93' },
-          grid: { color: BORDER_COLOR },
-        },
-        x: {
-          ticks: { font: { family: FONT_MONO, size: 10 }, color: '#1A1A19' },
-          grid: { color: BORDER_COLOR },
-        },
-      },
-      plugins: {
-        legend: { display: true, labels: { font: { family: FONT_MONO, size: 10 }, usePointStyle: true } },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const row = ctx.dataset._rounds[ctx.dataIndex + 1];
-              const base = ` ${ctx.dataset.label}: ${ctx.parsed.y}% immune`;
-              return row ? `${base} · broke ${row.broke_here} (of ${row.delivered})` : `${base} (not reached)`;
-            },
-          },
-        },
-      },
-    },
-  });
+  const rows = ordered.map(([model, s], idx) => {
+    const attempts = s.attempts || 1;
+    const held = s.rounds.at(-1)?.immunity_pct ?? 0;
+    const dot = colors[idx % colors.length];
+
+    // Segments left→right in the order they fell: broke@R1, broke@R2, …, then the
+    // survivors. Widths are shares of this model's own cohort, so every bar is full.
+    let segs = s.rounds.map(r => {
+      const pct = (r.broke_here / attempts) * 100;
+      return { pct, color: pressureColor(r.round, maxRound),
+               title: `Round ${r.round}: ${r.broke_here} of ${r.delivered} delivered broke here` };
+    }).filter(seg => seg.pct > 0);
+    segs.push({ pct: held, color: SURVIVAL_HELD_COLOR, held: true,
+                title: `Held to round ${maxRound}: ${Math.round(held * 10) / 10}% immune` });
+
+    const bar = segs.map(seg => {
+      const label = seg.pct >= 9 ? `${Math.round(seg.pct)}%` : '';
+      return `<span class="attrition-seg${seg.held ? ' attrition-held' : ''}"
+                    style="width:${seg.pct}%;background:${seg.color}" title="${seg.title}">${label}</span>`;
+    }).join('');
+
+    return `
+<div class="attrition-row">
+  <span class="attrition-name"><span class="lb-dot" style="background:${dot}"></span>${model}</span>
+  <div class="attrition-track">${bar}</div>
+  <span class="attrition-held-val">${Math.round(held)}%</span>
+</div>`;
+  }).join('');
+
+  el.innerHTML = `
+${rows}
+<div class="attrition-axis">
+  <span class="attrition-name"></span>
+  <span class="attrition-axis-line">round 1 · mildest pressure → round ${maxRound} · heaviest</span>
+  <span class="attrition-held-val">held</span>
+</div>
+<div class="attrition-legend">
+  <span><i style="background:#C0392B"></i>folded first round</span>
+  <span><i style="background:#D39A2F"></i>held longer, then broke</span>
+  <span><i style="background:${SURVIVAL_HELD_COLOR}"></i>held all rounds</span>
+</div>`;
 }
 
 // ── Live Outcome Donut ────────────────────────────────────────────────────────

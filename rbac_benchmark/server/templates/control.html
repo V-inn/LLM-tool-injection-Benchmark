@@ -151,11 +151,17 @@
     </div>
     <div id="progress-text" style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);display:none"></div>
 
-    <div class="stats-grid">
+    <div class="stats-row-3">
       <div class="stat-card"><div class="stat-label">Inferences</div><div class="stat-value" id="stat-inferences">—</div></div>
       <div class="stat-card"><div class="stat-label">Immunity</div><div class="stat-value" id="stat-immunity" style="color:#1E8A5B">—</div></div>
       <div class="stat-card"><div class="stat-label">Tasks/s</div><div class="stat-value" id="stat-rate">—</div></div>
-      <div class="stat-card"><div class="stat-label">Sev-3</div><div class="stat-value" id="stat-sev3" style="color:#C0392B">0</div></div>
+    </div>
+
+    <div class="sev-ladder-eyebrow">Violations by severity</div>
+    <div class="sev-ladder">
+      <div class="sev-cell" style="--sev:#D39A2F"><div class="sev-tier">SEV-1</div><div class="sev-count" id="stat-sev1">0</div></div>
+      <div class="sev-cell" style="--sev:#C56B2C"><div class="sev-tier">SEV-2</div><div class="sev-count" id="stat-sev2">0</div></div>
+      <div class="sev-cell" style="--sev:#C0392B"><div class="sev-tier">SEV-3</div><div class="sev-count" id="stat-sev3">0</div></div>
     </div>
 
     <!-- Live donut -->
@@ -518,7 +524,6 @@ function openStream(runId) {
         appendLog(msg.line);
         parseTotal(msg.line);
         parseOutcome(msg.line);
-        parseSev3(msg.line);
         parseThought(msg.line);
         parseProgress(msg.line);
       }
@@ -575,13 +580,6 @@ function parseThought(line) {
   if (m) pushLiveThought(m[1]);
 }
 
-function parseSev3(line) {
-  if (/severity_3_violation/i.test(line)) {
-    const el = document.getElementById('stat-sev3');
-    el.textContent = parseInt(el.textContent || '0') + 1;
-  }
-}
-
 function parseProgress(line) {
   if (_total <= 0) return;
   const frac = _completed / _total;
@@ -595,6 +593,12 @@ function updateStats() {
   // emits the enum *value* ("compliant"), matching this key and the donut colours.
   const immune = _outcomes['compliant'] || 0;
   document.getElementById('stat-immunity').textContent = _completed ? Math.round(immune / _completed * 100) + '%' : '—';
+  // Severity tallies are recomputed from the parsed outcome counts every tick, so
+  // they reset cleanly with _outcomes on each Run/reattach — unlike the old
+  // parseSev3, which scraped and incremented the DOM and so never zeroed on rerun.
+  document.getElementById('stat-sev1').textContent = _outcomes['severity_1_violation'] || 0;
+  document.getElementById('stat-sev2').textContent = _outcomes['severity_2_violation'] || 0;
+  document.getElementById('stat-sev3').textContent = _outcomes['severity_3_violation'] || 0;
   const elapsed = (Date.now() - _startTs) / 1000;
   // NB: the previous code wrote `~Math.round(...)` — bitwise NOT — which turned a
   // rate of 0 into -1 ("-1/s"). Plain rounding is what was intended.
