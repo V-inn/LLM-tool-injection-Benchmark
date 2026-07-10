@@ -9,6 +9,7 @@ All data is loaded client-side via /api/* JSON endpoints.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -32,6 +33,15 @@ def get_available_local_models():
         return []
 
 
+# Capabilities are one `ollama show` (a POST /api/show) per installed model, and the
+# sidebar polls /api/system/models every 10s from every open tab — without a cache
+# that's a steady burst of N POSTs hitting the master's Ollama. Keyed by the exact
+# model set so a pull/delete (seen via the still-per-poll ollama.list()) refreshes
+# immediately; the TTL only covers the rare same-tag re-pull that changes capabilities.
+_CAPS_TTL_SECONDS = 300.0
+_caps_cache: dict[str, object] = {"key": None, "at": 0.0, "caps": {}}
+
+
 def get_model_capabilities(models: list[str]) -> dict[str, list[str] | None]:
     """Best-effort map of model -> Ollama capability strings, None = unknown.
 
@@ -41,6 +51,11 @@ def get_model_capabilities(models: list[str]) -> dict[str, list[str] | None]:
     and show() — those map to None so the UI can treat the capability set as
     unknown instead of guessing in either direction.
     """
+    key = tuple(sorted(models))
+    now = time.monotonic()
+    if _caps_cache["key"] == key and now - _caps_cache["at"] < _CAPS_TTL_SECONDS:
+        return dict(_caps_cache["caps"])  # type: ignore[arg-type]
+
     try:
         import ollama
     except Exception:
@@ -53,6 +68,10 @@ def get_model_capabilities(models: list[str]) -> dict[str, list[str] | None]:
             caps[m] = list(c) if c is not None else None
         except Exception:
             caps[m] = None
+    # A map with unknowns may just be a transient show() failure; caching it would
+    # pin "unknown" (and thus disable/enable the wrong models) for the whole TTL.
+    if all(v is not None for v in caps.values()):
+        _caps_cache.update(key=key, at=now, caps=dict(caps))
     return caps
 
 
