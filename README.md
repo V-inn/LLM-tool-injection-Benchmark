@@ -65,7 +65,7 @@ tests/          pytest suite for the metric / extraction / κ math
 *   **LLM-as-a-Judge (`rbac_benchmark/evaluation/llm_judge.py`):** Analyses target `[THOUGHT]` traces to grade both psychological axes — awareness and Cialdini manipulation lever (runs at temperature 0 for reproducibility).
 *   **Payload Generators (`rbac_benchmark/generation/`):** Automated red-team / blue-team modules that synthesise attack payloads and resilient system prompts.
 
-Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`.
+Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`, `rbac-server` (the FastAPI app object — normally launched with `uvicorn` as shown below).
 
 ## Cluster Resilience (Crash-Resume + Live Membership)
 
@@ -127,6 +127,8 @@ The web UI (`http://localhost:8000`) has five pages:
 
 1.  **Control Center (`/control`):**
     Configure execution parameters (target models, iterations, max tool-calling turns) and click **▶ Run Benchmark** to begin. Live logs and a progress bar stream via SSE; an outcome pie updates in place.
+
+    While a run is active the button becomes **■ Stop** — a *two-stage graceful* halt: the first press stops dispatching new inferences and moves straight to the judge phase to score the tests already completed; a second press interrupts the judge too and saves the partial results. Either way the output is a normal, resumable `benchmark_results.json` (tick **Resume last run** later to finish only what is missing). The separate **✕ Abort** button is the immediate hard kill (SIGKILL) — nothing after the last 30-second checkpoint is saved; use it only for a hung run.
 
 2.  **Dashboard (`/dashboard`):**
     View Immunity/FPR KPIs, the Control Illusion Psychological Matrix, the Model Resilience Radar, the per-defense performance table, and Phase-2 attack-validity / ΔImmunity views.
