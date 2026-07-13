@@ -65,7 +65,7 @@ tests/          pytest suite for the metric / extraction / κ math
 *   **LLM-as-a-Judge (`rbac_benchmark/evaluation/llm_judge.py`):** Analyses target `[THOUGHT]` traces to grade both psychological axes — awareness and Cialdini manipulation lever (runs at temperature 0 for reproducibility).
 *   **Payload Generators (`rbac_benchmark/generation/`):** Automated red-team / blue-team modules that synthesise attack payloads and resilient system prompts.
 
-Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`, `rbac-server` (the FastAPI app object — normally launched with `uvicorn` as shown below).
+Console entry points (after `pip install -e .`): `rbac-master`, `rbac-worker`, `rbac-analyze`, `rbac-kappa`, `rbac-gen-injections`, `rbac-gen-defenses`, `rbac-server` (launches the Control Center via uvicorn on `RBAC_PORT`, default 8000; `start_master.sh` remains the primary launcher).
 
 ## Cluster Resilience (Crash-Resume + Live Membership)
 

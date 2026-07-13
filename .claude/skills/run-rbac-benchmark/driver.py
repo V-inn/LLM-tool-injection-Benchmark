@@ -24,18 +24,20 @@ surfaces a future agent (or PR) actually touches:
 
 The project is an installed package (`pip install -e .`); module surfaces are
 invoked with `python -m rbac_benchmark.<...>`. Run this with the repo's
-virtualenv interpreter (.venv/Scripts/python.exe on Windows).
+virtualenv interpreter (.venv/bin/python on Linux, .venv/Scripts/python.exe
+on Windows).
 
 Examples (from repo root):
-    .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py smoke
-    .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py worker-smoke
-    .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py shot --tab "Dashboard"
+    .venv/bin/python .claude/skills/run-rbac-benchmark/driver.py smoke
+    .venv/bin/python .claude/skills/run-rbac-benchmark/driver.py worker-smoke
+    .venv/bin/python .claude/skills/run-rbac-benchmark/driver.py shot --page dashboard
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -52,9 +54,13 @@ SERVER_MODULE = "rbac_benchmark.server.app:app"
 SHOT_DIR = SKILL_DIR / "screenshots"
 
 # Firefox binary — override with FIREFOX_BIN if installed elsewhere.
-FIREFOX_BIN = os.environ.get(
-    "FIREFOX_BIN", r"C:\Program Files\Mozilla Firefox\firefox.exe"
-)
+def _default_firefox() -> str:
+    if os.name == "nt":
+        return r"C:\Program Files\Mozilla Firefox\firefox.exe"
+    return shutil.which("firefox") or "/usr/bin/firefox"
+
+
+FIREFOX_BIN = os.environ.get("FIREFOX_BIN") or _default_firefox()
 
 # ---------------------------------------------------------------------------
 # Synthetic results fixture used by `seed`/`shot` to give the dashboard data
@@ -234,7 +240,7 @@ def cmd_seed(args) -> int:
 
 
 # ---------------------------------------------------------------------------
-# shot — launch Streamlit headless, screenshot a tab with Firefox, tear down
+# shot — launch FastAPI/uvicorn headless, screenshot a page with Firefox, tear down
 # ---------------------------------------------------------------------------
 def _wait_http(port: int, timeout: float = 40.0) -> bool:
     import urllib.request

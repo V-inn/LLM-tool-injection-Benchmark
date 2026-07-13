@@ -194,3 +194,19 @@ def page_prompts(request: Request):
 @app.get("/kappa")
 def page_kappa(request: Request):
     return templates.TemplateResponse(request, "kappa.html", _ctx("kappa"))
+
+
+def main() -> None:
+    """Console entry point (``rbac-server``): serve the Control Center via uvicorn.
+
+    Mirrors the uvicorn invocation in start_master.sh — binds to localhost only
+    (worker discovery is UDP and the master talks to Ollama directly, so the
+    dashboard needs no inbound LAN HTTP) on the ``RBAC_PORT`` port (default 8000).
+    start_master.sh still launches uvicorn against the ``:app`` object directly, so
+    it is unaffected; this is an additive convenience runner.
+    """
+    import os
+    import uvicorn
+
+    port = int(os.environ.get("RBAC_PORT", "8000"))
+    uvicorn.run(app, host="127.0.0.1", port=port)
