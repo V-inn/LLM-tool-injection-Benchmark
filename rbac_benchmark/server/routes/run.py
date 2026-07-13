@@ -214,16 +214,40 @@ def get_active_run():
     return {"run_id": run_id, "started_at": _RUNS[run_id].get("started_at")}
 
 
-# ── /api/run/abort/{run_id} ───────────────────────────────────────────────────
-@router.post("/abort/{run_id}")
-async def abort_run(run_id: str):
+# ── /api/run/stop/{run_id} ────────────────────────────────────────────────────
+@router.post("/stop/{run_id}")
+async def stop_run(run_id: str):
+    """Graceful two-stage stop (SIGTERM), one press per call.
+
+    1st call: the master stops dispatching inferences and moves to the judge phase,
+    scoring the tests already completed. 2nd call: it interrupts the judge and saves
+    the partial results. Either way the output is a normal, resumable results file.
+    Use /abort for an immediate SIGKILL.
+    """
     entry = _RUNS.get(run_id)
     if entry and entry.get("proc"):
         try:
-            entry["proc"].terminate()
+            entry["proc"].terminate()  # SIGTERM — caught by the master's handler
         except Exception:
             pass
-    return {"ok": True}
+    return {"ok": True, "mode": "graceful"}
+
+
+# ── /api/run/abort/{run_id} ───────────────────────────────────────────────────
+@router.post("/abort/{run_id}")
+async def abort_run(run_id: str):
+    """Hard abort: SIGKILL terminates the master immediately, no save.
+
+    Unlike /stop this cannot be intercepted, so anything since the last 30 s
+    checkpoint is lost. Use it when a run is hung and must die now.
+    """
+    entry = _RUNS.get(run_id)
+    if entry and entry.get("proc"):
+        try:
+            entry["proc"].kill()  # SIGKILL — immediate, uncatchable
+        except Exception:
+            pass
+    return {"ok": True, "mode": "hard"}
 
 
 # ── /api/run/stream/{run_id} ──────────────────────────────────────────────────

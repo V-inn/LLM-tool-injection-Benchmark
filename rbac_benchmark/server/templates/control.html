@@ -472,9 +472,9 @@ function getConfig() {
 }
 
 async function handleRunBtn() {
-  // While a run is active the button is relabelled "■ Stop" — make it actually
-  // stop instead of no-op'ing (the previous `return` left the label lying).
-  if (_runId) { handleAbort(); return; }
+  // While a run is active the button is relabelled "■ Stop" — a graceful stop
+  // that saves partial results. The dedicated "✕ Abort" button is the hard kill.
+  if (_runId) { handleStop(); return; }
   const config = getConfig();
   if (!config.models.length) { alert('Select at least one model.'); return; }
   try {
@@ -490,7 +490,21 @@ async function handleRunBtn() {
   }
 }
 
+async function handleStop() {
+  // Graceful two-stage stop (SIGTERM): 1st press stops inference and starts the
+  // judge on completed tests; 2nd press interrupts the judge and saves. Leave the
+  // stream open — the master emits __DONE__ when it finishes, which resets the UI.
+  // Do NOT clear _runId here, or the 2nd press / Abort would be disabled.
+  if (!_runId) return;
+  try {
+    await api(`/api/run/stop/${_runId}`, { method: 'POST' });
+  } catch(e) { /* ignore */ }
+  showStatus('warn', 'Stopping inference — judging completed tests. Press Stop again to interrupt the judge and save.');
+}
+
 async function handleAbort() {
+  // Hard abort: SIGKILL the master immediately (nothing saved since the last
+  // 30 s checkpoint). Close the stream and reset the UI right away.
   if (!_runId) return;
   try {
     await api(`/api/run/abort/${_runId}`, { method: 'POST' });
@@ -498,7 +512,7 @@ async function handleAbort() {
   if (_es) { _es.close(); _es = null; }
   _runId = null;
   setRunning(false);
-  showStatus('warn', 'Benchmark aborted.');
+  showStatus('warn', 'Benchmark aborted (killed).');
 }
 
 function openStream(runId) {

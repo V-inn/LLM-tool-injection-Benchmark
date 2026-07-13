@@ -67,6 +67,7 @@ increases throughput without any code changes.
 
 import socket
 import asyncio
+import signal
 import json
 import argparse
 import logging
@@ -1231,7 +1232,36 @@ async def main(config: BenchmarkConfig):
         membership_supervisor(registry, task_queue, results_matrix, config, consumer_tasks)
     )
 
-    await task_queue.join()
+    # Two-stage graceful stop vs hard abort. A SIGTERM (the web UI "Stop" button):
+    #   1st press — stop dispatching normal inferences and go straight to the judge
+    #               phase, scoring the tests already completed;
+    #   2nd press — interrupt the judge too and save whatever has been scored.
+    # The "✕ Abort" button sends SIGKILL, which no handler can intercept, for an
+    # immediate kill. The helper below re-arms the SAME event before each phase, so
+    # one press only affects the phase currently running.
+    stop_event = asyncio.Event()
+
+    async def _run_until_stop(done_coro) -> bool:
+        """Await done_coro, or an early SIGTERM. Returns True if a SIGTERM won."""
+        stop_event.clear()
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            pass  # signals unavailable (non-main thread / unsupported platform)
+        done_task = asyncio.create_task(done_coro)
+        stop_task = asyncio.create_task(stop_event.wait())
+        await asyncio.wait({done_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        stopped = stop_event.is_set()
+        for _t in (done_task, stop_task):
+            if not _t.done():
+                _t.cancel()
+        return stopped
+
+    inference_interrupted = await _run_until_stop(task_queue.join())
+    if inference_interrupted:
+        logging.warning("[stop] SIGTERM received — stopping inference; moving to the "
+                        "judge phase to score the tests already completed. Press Stop "
+                        "again to interrupt the judge and save.")
 
     supervisor_task.cancel()
     try:
@@ -1252,6 +1282,9 @@ async def main(config: BenchmarkConfig):
             pass
 
     # --- BATCH EVALUATION PHASE (DISTRIBUTED LLM-AS-A-JUDGE) ---
+    # Runs whether inference finished on its own or was stopped early — a first Stop
+    # brings us here to score whatever completed. If there is no judge, an interrupted
+    # inference simply falls through to the final save below (partial, resumable).
     if config.use_judge:
         # Judge on whatever nodes are healthy now (fall back to all known nodes).
         cluster_workers = [ws.ip for ws in registry.values() if ws.healthy] \
@@ -1306,12 +1339,23 @@ async def main(config: BenchmarkConfig):
                 )
                 judge_tasks.append(task)
 
-        await judge_queue.join()
+        judge_interrupted = await _run_until_stop(judge_queue.join())
 
         for task in judge_tasks:
             task.cancel()
 
-        logging.info("[+] Distributed judgment complete!")
+        if judge_interrupted:
+            logging.warning("[stop] SIGTERM received during judgment — interrupting the "
+                            "judge and saving partial judge results.")
+        else:
+            logging.info("[+] Distributed judgment complete!")
+
+    # Restore the default SIGTERM so anything after this point (final save) is not
+    # left waiting on an event nobody reads — a late Stop now terminates normally.
+    try:
+        asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
+    except (NotImplementedError, RuntimeError, ValueError):
+        pass
 
     if hb_transport is not None:
         hb_transport.close()
