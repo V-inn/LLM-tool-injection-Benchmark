@@ -1,6 +1,6 @@
 ---
 name: run-rbac-benchmark
-description: Build, launch, screenshot, and drive the Tool-Calling RBAC Resilience Benchmark (the Streamlit "LLM Red Team Benchmark" GUI, the master orchestrator, the worker daemon, and the analyzer metrics modules). Use when asked to run, start, serve, build, test, smoke-test, or screenshot this benchmark / dashboard / Streamlit app, or to verify a change to the metrics (TPR/FPR/delta-TPR), the config, the worker, or the GUI.
+description: Build, launch, screenshot, and drive the Tool-Calling RBAC Resilience Benchmark (FastAPI "LLM Red Team Benchmark" web UI, the master orchestrator, the worker daemon, and the analyzer metrics modules). Use when asked to run, start, serve, build, test, smoke-test, or screenshot this benchmark / dashboard / FastAPI app, or to verify a change to the metrics (Immunity/FPR/ΔImmunity), the config, the worker, or the UI.
 ---
 
 # Run the Tool-Calling RBAC Resilience Benchmark
@@ -8,13 +8,14 @@ description: Build, launch, screenshot, and drive the Tool-Calling RBAC Resilien
 A distributed benchmark that stress-tests how local LLMs honour RBAC directives
 under tool-output prompt injection. The code is an installable package,
 `rbac_benchmark` (subpackages: `core`, `llm`, `evaluation`, `generation`,
-`orchestration`, `worker`, `ui`). Runnable surfaces:
+`orchestration`, `worker`, `server`). Runnable surfaces:
 
 - **Internal metrics modules** (`rbac_benchmark/core/config.py`,
-  `rbac_benchmark/evaluation/`) — TPR / FPR / delta-TPR / attack-strength /
+  `rbac_benchmark/evaluation/`) — Immunity / FPR / ΔImmunity / attack-strength /
   Cohen's κ. **Most PRs touch this layer.** Covered by `tests/` (pytest).
-- **Streamlit GUI** (`rbac_benchmark/ui/app.py`, "LLM Red Team Benchmark") — thin
-  shell + `ui/data.py`, `ui/charts.py`, `ui/state.py`, `ui/tabs/*.py`.
+- **FastAPI web server** (`rbac_benchmark/server/app.py`) — Jinja2-rendered HTML
+  pages at `/control`, `/dashboard`, `/payload`, `/prompts`, `/kappa`; all data
+  loaded client-side via `/api/*` JSON endpoints. Launch with uvicorn on port 8000.
 - **Worker daemon** (`rbac_benchmark/worker/node.py`) — UDP discovery responder.
 
 Runtime data artifacts (results, generated prompts, kappa worksheet) live in
@@ -62,8 +63,8 @@ One driver, four subcommands. Run from the repo root.
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py smoke
 ```
 
-Runs `pytest -q` (the `tests/` suite: `InferenceMetrics` accounting, TPR/FPR,
-delta-TPR, attack-strength, Cohen's κ known-value + degenerate cases, and the
+Runs `pytest -q` (the `tests/` suite: `InferenceMetrics` accounting, Immunity/FPR,
+ΔImmunity, attack-strength, Cohen's κ known-value + degenerate cases, and the
 Phase-3 stored-label extraction). Ends with `SMOKE OK`. This is the fastest way to
 verify a change to the metrics math. (`.venv/Scripts/python.exe -m pytest -q` works
 directly too.)
@@ -78,28 +79,28 @@ Launches the worker daemon (`rbac_benchmark/worker/node.py`), sends `OLLAMA_MAST
 asserts the `OLLAMA_READY` reply, tears the daemon down. Ends with
 `WORKER SMOKE OK`.
 
-### 3. GUI screenshot — launch Streamlit + drive Firefox, then tear down
+### 3. GUI screenshot — launch FastAPI/uvicorn + drive Firefox, then tear down
 
 ```bash
-# Control Center tab (default landing page)
+# Control Center (default landing page)
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py shot \
-  --out .claude/skills/run-rbac-benchmark/screenshots/control_center.png
+  --out .claude/skills/run-rbac-benchmark/screenshots/control.png
 
-# Dashboard & Results tab (renders the seeded metrics + Plotly charts)
+# Dashboard page (renders the seeded metrics + Chart.js charts)
 .venv/Scripts/python.exe .claude/skills/run-rbac-benchmark/driver.py shot \
-  --tab "Dashboard" \
+  --page dashboard \
   --out .claude/skills/run-rbac-benchmark/screenshots/dashboard.png
 ```
 
 `shot` seeds `data/benchmark_results.json` + `data/kappa_samples.json` with the
-synthetic fixtures, starts Streamlit headless (on `rbac_benchmark/ui/app.py`) on
-port 8501, waits for `/healthz`, waits for the SPA to **hydrate** (the title text
-appears only after JS runs — a plain one-shot screenshot captures a blank shell),
-optionally clicks a tab, screenshots the full page, then kills Streamlit and
-Firefox. Ends with `SHOT OK -> <path>`. Screenshots land in
+synthetic fixtures, starts uvicorn headless on port 8000, waits for `/api/docs` to
+return 200, navigates Firefox to the target page, waits for the page title to
+appear, screenshots the full page, then tears everything down. Ends with
+`SHOT OK -> <path>`. Screenshots land in
 `.claude/skills/run-rbac-benchmark/screenshots/` (git-ignored). Pass `--no-seed`
-to screenshot whatever data is already there. Tabs: "Control Center", "Payload
-Generation", "Custom Prompts", "Dashboard", "Judge Validation".
+to screenshot whatever data is already there.
+
+Pages (pass to `--page`): `control`, `dashboard`, `payload`, `prompts`, `kappa`.
 
 ### 4. Seed dashboard data only
 
@@ -108,21 +109,19 @@ Generation", "Custom Prompts", "Dashboard", "Judge Validation".
 ```
 
 Writes `data/benchmark_results.json` + `data/kappa_samples.json` (git-ignored) so
-the dashboard + Judge Validation tab have data without a real run. `shot` does this.
+the dashboard + Judge κ page have data without a real run. `shot` does this automatically.
 
 ## Run (human path)
 
-`bash start_master.sh` (Linux) starts Ollama + the `rbac-dashboard` entry point and
-opens a browser. Useless headless and assumes Ollama is installed. Cross-platform
-equivalent without Ollama:
+`bash start_master.sh` (Linux) starts Ollama and opens a browser. Useless headless.
+Cross-platform equivalent without Ollama:
 
 ```bash
-.venv/Scripts/python.exe -m streamlit run rbac_benchmark/ui/app.py
+.venv/Scripts/python.exe -m uvicorn rbac_benchmark.server.app:app --reload --port 8000
 ```
 
-Then open http://localhost:8501. The sidebar will show a red "Failed to connect
-to Ollama" error — expected without Ollama; the UI still works for viewing
-results. Ctrl-C to stop.
+Then open http://localhost:8000. The nav rail Ollama status shows "checking…" /
+offline — expected without Ollama; all pages still render. Ctrl-C to stop.
 
 ## Direct invocation
 
@@ -130,8 +129,8 @@ The analyzer and kappa modules are standalone CLIs (entry points after
 `pip install -e .`; the `python -m` form works without install too):
 
 ```bash
-rbac-analyze data/benchmark_results.json                    # aggregate TPR/FPR report
-rbac-analyze data/benchmark_results.json --delta-tpr        # marginal defense gain
+rbac-analyze data/benchmark_results.json                    # aggregate Immunity/FPR report
+rbac-analyze data/benchmark_results.json --delta-immunity   # marginal defense gain
 rbac-analyze data/benchmark_results.json --validate-attacks # Phase 2 attack strength
 rbac-kappa   data/kappa_samples.json                        # Phase 3 Cohen's κ (offline)
 # equivalently: .venv/Scripts/python.exe -m rbac_benchmark.evaluation.analyzer ...
@@ -149,16 +148,18 @@ is the recommended sanity check after editing any `core`/`evaluation` module.
 
 ## Gotchas
 
-- **Streamlit is a websocket SPA.** Firefox's one-shot `firefox --screenshot URL`
-  captures a **blank dark shell** because the page hasn't hydrated yet. You must
-  drive it with Selenium and wait for an element (the title) to appear — which
-  is exactly what `driver.py shot` does. Don't "simplify" it back to a one-shot.
+- **FastAPI nav uses `<a>` links, not tab buttons.** `base.html` renders
+  `<a href="/page_id" class="nav-item">` elements in a sidebar nav rail — NOT
+  `<button role="tab">`. `driver.py shot` navigates to the target page by URL
+  (`--page <route>`). Don't write Selenium XPaths for `button[@role='tab']`.
+- **`/healthz` does not exist.** The readiness probe in `driver.py` polls
+  `/api/docs` (FastAPI auto-serves this at 200). If you add a custom `/healthz`,
+  update `_wait_http` in driver.py.
 - **Use `save_full_page_screenshot`**, not `save_screenshot` — the dashboard is
   taller than the viewport and a viewport shot crops the charts.
-- **Ollama offline is fine.** `get_available_local_models()` falls back to a
-  hardcoded model list, so the GUI launches and renders without Ollama. A real
-  benchmark *run* (clicking "Run Benchmark") still needs Ollama + models and is
-  not exercised here.
+- **Ollama offline is fine.** `get_available_local_models()` returns `[]`; the
+  nav cluster shows offline. A real benchmark *run* (POST `/api/run/start`) still
+  needs Ollama + models and is not exercised here.
 - **`pyyaml` missing from the venv** despite being a dependency — imports of
   `core.config.from_yaml` (and anything importing yaml) fail until you
   `pip install pyyaml` (or re-run `pip install -e .`).
@@ -168,8 +169,8 @@ is the recommended sanity check after editing any `core`/`evaluation` module.
 - **`rbac-analyze` argparse uses `--baseline-defense`**, not `--baseline`
   (prefix-matching lets `--baseline` work too, but the real flag is the long one).
 - **`start_master.sh` / `start_worker.sh` are Linux-only** (`pkill`, `ollama serve`,
-  `xdg-open` for the cat GIF). Don't run them on Windows; launch Streamlit
-  directly per the human-path command above.
+  `xdg-open` for the cat GIF). Don't run them on Windows; launch uvicorn directly
+  per the human-path command above.
 
 ## Troubleshooting
 
@@ -179,4 +180,4 @@ is the recommended sanity check after editing any `core`/`evaluation` module.
 - `shot` produces a blank/dark image → you bypassed the hydration wait; use
   `driver.py shot`, not a raw `firefox --screenshot`.
 - Firefox not found → set `FIREFOX_BIN` to your `firefox.exe` path.
-- `Streamlit did not become ready` → port 8501 is busy; pass `--port <n>`.
+- `uvicorn did not become ready` → port 8000 is busy; pass `--port <n>`.

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}LLM Red Team Benchmark{% endblock %}</title>
+  <link rel="stylesheet" href="{{ static_url('theme.css') }}"/>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<!-- ── Nav rail ───────────────────────────────────────────────────────────── -->
+<aside class="nav-rail">
+  <div class="nav-logo">
+    <div class="nav-logo-mark"><div class="nav-logo-mark-inner"></div></div>
+    <div>
+      <div class="nav-logo-title">LLM Red Team Benchmark</div>
+      <div class="nav-logo-sub">control-illusion · RBAC resilience audit</div>
+    </div>
+  </div>
+
+  <nav class="nav-section">
+    <div class="nav-section-label">Workspace</div>
+    {% for page_id, page_name in pages.items() %}
+    <a href="/{{ page_id }}" class="nav-item{% if active_page == page_id %} active{% endif %}">
+      <span class="nav-num">0{{ loop.index }}</span>
+      {{ page_name }}
+    </a>
+    {% endfor %}
+  </nav>
+
+  <div class="nav-cluster">
+    <div class="cluster-label">Cluster</div>
+    <div class="cluster-row" id="cluster-row">
+      <span class="cluster-dot offline" id="cluster-dot"></span>
+      <span>Ollama</span>
+      <span id="cluster-status" style="margin-left:auto;font-size:9.5px;color:#D5B23A;">checking…</span>
+    </div>
+    <div class="cluster-models" id="cluster-models"></div>
+    <div class="cluster-nodes-label">Worker nodes</div>
+    <div class="cluster-nodes" id="cluster-nodes"></div>
+  </div>
+</aside>
+
+<!-- ── Main content ────────────────────────────────────────────────────────── -->
+<main class="main-area">
+  {% block content %}{% endblock %}
+</main>
+
+<script src="{{ static_url('app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "_note": "CAVEAT before trusting deltas: verify github.com/ollama/ollama/issues/14502 (GGUF load issue involving mmproj/vision files for Qwen) does not affect this exact tag on the worker nodes before trusting the think/nothink Immunity delta. Run `ollama show qwen3.5:29b` on each node and check master warm-up logs for load errors/stalls. This key is dropped by BenchmarkConfig.from_json (unknown field) — it's documentation only.",
+  "models": ["qwen3.5:29b#think", "qwen3.5:29b#nothink"],
+  "iterations": 5,
+  "concurrency_per_node": 1,
+  "use_custom_prompts": true,
+  "use_generated_injections": true,
+  "use_generated_defenses": true,
+  "use_judge": true,
+  "judge_model": "qwen3.5:9b",
+  "ref_model": "qwen3.5:29b#nothink",
+  "calibration_defense": "S1_BASELINE",
+  "output": "data/ablation_qwen35_thinking_results.json"
+}

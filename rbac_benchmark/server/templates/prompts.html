@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Custom Prompts · LLM Red Team Benchmark{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">Custom Prompts</div>
+  <div class="page-subtitle">manage defense system prompts injected into the evaluation matrix</div>
+</div>
+
+<div class="two-col two-col-12">
+  <!-- Left: prompt list -->
+  <div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:600" id="prompt-count">Loading…</div>
+      <button class="btn btn-primary" onclick="openEditor(null)">+ New prompt</button>
+    </div>
+    <div id="prompt-list">
+      <div class="alert alert-info">Loading custom prompts…</div>
+    </div>
+  </div>
+
+  <!-- Right: editor -->
+  <div style="position:sticky;top:24px">
+    <div class="card" id="editor-card">
+      <div class="card-title" id="editor-title">New defense prompt</div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="editor-name" placeholder="e.g. tiered_refusal_v2">
+      </div>
+      <div class="form-group">
+        <label class="form-label">System prompt</label>
+        <textarea id="editor-text" rows="8" placeholder="Enter defense system prompt…"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Target levers</label>
+        <div class="multi-check">
+          <label><input type="checkbox" name="editor-lever" value="AUTHORITY"><span>AUTHORITY</span></label>
+          <label><input type="checkbox" name="editor-lever" value="SCARCITY_URGENCY"><span>SCARCITY</span></label>
+          <label><input type="checkbox" name="editor-lever" value="SOCIAL_PROOF"><span>SOC PROOF</span></label>
+          <label><input type="checkbox" name="editor-lever" value="RECIPROCITY"><span>RECIPROCITY</span></label>
+          <label><input type="checkbox" name="editor-lever" value="COMMITMENT_CONSISTENCY"><span>COMMITMENT</span></label>
+          <label><input type="checkbox" name="editor-lever" value="LIKING"><span>LIKING</span></label>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="savePrompt()" style="flex:1">Save to matrix</button>
+        <button class="btn btn-ghost" onclick="clearEditor()">Clear</button>
+      </div>
+      <div id="editor-status" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _prompts = [];
+let _editingKey = null;
+
+(async () => { await loadPrompts(); })();
+
+async function loadPrompts() {
+  try {
+    const d = await api('/api/prompts');
+    _prompts = d.prompts || [];
+    renderList();
+  } catch(e) {
+    document.getElementById('prompt-list').innerHTML =
+      `<div class="alert alert-error">Failed to load prompts: ${e.message}</div>`;
+  }
+}
+
+function renderList() {
+  const active   = _prompts.filter(p => !p.disabled);
+  const disabled = _prompts.filter(p => p.disabled);
+  document.getElementById('prompt-count').textContent =
+    `${active.length} active · ${disabled.length} disabled · ${_prompts.length} total`;
+
+  document.getElementById('prompt-list').innerHTML = _prompts.map(p => {
+    const dotClass = p.disabled ? 'disabled' : 'active';
+    const statusLabel = p.disabled ? 'disabled' : 'active';
+    const preview = (p.text || p.system_prompt || '').slice(0, 180);
+    const charCount = (p.text || p.system_prompt || '').length;
+    return `
+<div class="prompt-card" id="pc-${p.key}">
+  <div class="prompt-card-header">
+    <span class="prompt-dot ${dotClass}"></span>
+    <span class="prompt-name">${escHtml(p.name || p.key)}</span>
+    ${p.source === 'generated' ? '<span class="chip chip-def" style="margin-left:2px">generated</span>' : ''}
+    <span class="prompt-status" style="color:${p.disabled ? '#9A9A93' : '#1E8A5B'};margin-left:auto">${statusLabel}</span>
+  </div>
+  <div class="prompt-preview">${escHtml(preview)}${preview.length < charCount ? '…' : ''}</div>
+  <div class="prompt-footer">
+    <span class="prompt-meta">${charCount} chars${p.levers?.length ? ' · levers: ' + p.levers.join(', ') : ''}</span>
+    <div class="prompt-actions">
+      <button onclick="openEditor('${p.key}')">edit</button>
+      <button onclick="togglePrompt('${p.key}')">${p.disabled ? 'enable' : 'disable'}</button>
+      <button onclick="deletePrompt('${p.key}')" style="color:var(--breach)">delete</button>
+    </div>
+  </div>
+</div>`;
+  }).join('') || '<div class="alert alert-info">No custom prompts yet. Create one with the editor.</div>';
+}
+
+function openEditor(key) {
+  _editingKey = key;
+  if (!key) {
+    clearEditor();
+    document.getElementById('editor-title').textContent = 'New defense prompt';
+    return;
+  }
+  const p = _prompts.find(x => x.key === key);
+  if (!p) return;
+  document.getElementById('editor-title').textContent = `Edit: ${p.name || key}`;
+  document.getElementById('editor-name').value = p.name || p.key;
+  document.getElementById('editor-text').value = p.text || p.system_prompt || '';
+  document.querySelectorAll('input[name="editor-lever"]').forEach(cb => {
+    cb.checked = (p.levers || []).includes(cb.value);
+  });
+}
+
+function clearEditor() {
+  _editingKey = null;
+  document.getElementById('editor-title').textContent = 'New defense prompt';
+  document.getElementById('editor-name').value = '';
+  document.getElementById('editor-text').value = '';
+  document.querySelectorAll('input[name="editor-lever"]').forEach(cb => cb.checked = false);
+  document.getElementById('editor-status').innerHTML = '';
+}
+
+async function savePrompt() {
+  const name = document.getElementById('editor-name').value.trim();
+  const text = document.getElementById('editor-text').value.trim();
+  const levers = [...document.querySelectorAll('input[name="editor-lever"]:checked')].map(e => e.value);
+  if (!name) { alert('Prompt name required.'); return; }
+  if (!text)  { alert('System prompt text required.'); return; }
+  try {
+    await api('/api/prompts/save', {
+      method: 'POST', body: { key: _editingKey || name, name, text, levers }
+    });
+    await loadPrompts();
+    clearEditor();
+    document.getElementById('editor-status').innerHTML =
+      '<div class="alert alert-success">Saved successfully.</div>';
+  } catch(e) {
+    document.getElementById('editor-status').innerHTML =
+      `<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+async function togglePrompt(key) {
+  try {
+    await api(`/api/prompts/toggle/${encodeURIComponent(key)}`, { method: 'POST' });
+    await loadPrompts();
+  } catch(e) { alert(e.message); }
+}
+
+async function deletePrompt(key) {
+  if (!confirm(`Delete prompt "${key}"?`)) return;
+  try {
+    await api(`/api/prompts/delete/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    await loadPrompts();
+    if (_editingKey === key) clearEditor();
+  } catch(e) { alert(e.message); }
+}
+
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+{% endblock %}

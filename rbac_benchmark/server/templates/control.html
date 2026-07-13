@@ -1,0 +1,637 @@
+{% extends "base.html" %}
+{% block title %}Control Center · LLM Red Team Benchmark{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">Control Center</div>
+  <div class="page-subtitle">configure the evaluation matrix and dispatch to the cluster</div>
+</div>
+
+<div class="two-col two-col-14" id="cc-root">
+  <!-- Left: config accordions -->
+  <div id="cc-config">
+
+    <details class="accordion" open>
+      <summary>A — Target topologies &nbsp;·&nbsp; models &amp; judge</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Select local models</label>
+          <div class="multi-check" id="model-checkboxes">
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">Loading models…</span>
+          </div>
+          <div class="hint" style="margin-top:6px">
+            think mode: <b>default</b> keeps the Ollama request untouched · <b>on/off</b> pins
+            <code>think=</code> and labels the row <code>#think</code>/<code>#nothink</code> ·
+            <b>A/B</b> runs both variants as two independent result rows. Only shown for
+            models whose Ollama capabilities include <code>thinking</code>. Models without
+            the <code>tools</code> capability (embedding, plain vision) are disabled — the
+            benchmark is tool-calling end to end.
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Judge model</label>
+          <select id="judge-model"></select>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>B — Execution parameters &nbsp;·&nbsp; iterations &amp; turns</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Iterations per attack <span class="hint" id="iter-val">3</span></label>
+          <input type="range" id="iterations" min="1" max="20" value="3"
+                 oninput="document.getElementById('iter-val').textContent=this.value">
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="multi-turn">
+          <label for="multi-turn">Multi-turn escalation &nbsp;·&nbsp; refusal-gated ladder (base → ESCALATION → FINAL); off = single-shot</label>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max retries on error <span class="hint" id="retry-val">2</span></label>
+          <input type="range" id="max-retries" min="0" max="5" value="2"
+                 oninput="document.getElementById('retry-val').textContent=this.value">
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="exclude-master">
+          <label for="exclude-master">Exclude master node from inference</label>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="resume">
+          <label for="resume">Resume last run (continue benchmark_results.json — re-runs only missing iterations; requires the same models/defenses/attacks/iterations)</label>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>C — Prompt sources &amp; attack matrix</summary>
+      <div class="accordion-body">
+        <div class="check-row"><input type="checkbox" id="use-custom" checked><label for="use-custom">Custom prompts</label></div>
+        <div class="check-row"><input type="checkbox" id="use-gen-inj" checked><label for="use-gen-inj">Generated injections</label></div>
+        <div class="check-row"><input type="checkbox" id="use-gen-def" checked><label for="use-gen-def">Generated defenses</label></div>
+        <div class="check-row"><input type="checkbox" id="use-benign" checked><label for="use-benign">Include I0_BENIGN_CONTROL (measures FPR)</label></div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>D — Network &amp; discovery &nbsp;·&nbsp; Ollama + UDP</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Ollama port</label>
+          <input type="number" id="ollama-port" value="11434">
+        </div>
+        <div class="form-group">
+          <label class="form-label">UDP discovery port</label>
+          <input type="number" id="udp-port" value="5005">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Discovery timeout (s) <span class="hint" id="timeout-val">3.0</span></label>
+          <input type="range" id="timeout" min="1" max="10" step="0.5" value="3"
+                 oninput="document.getElementById('timeout-val').textContent=parseFloat(this.value).toFixed(1)+'s'">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Ollama request timeout (s)</label>
+          <input type="number" id="request-timeout" value="300" min="30" step="30">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Model load timeout (s)</label>
+          <input type="number" id="load-timeout" value="1800" min="60" step="60">
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>E — LLM-as-a-Judge &nbsp;·&nbsp; batch eval + thought logging</summary>
+      <div class="accordion-body">
+        <div class="check-row"><input type="checkbox" id="use-judge" checked><label for="use-judge">Enable batch evaluation (Axis A + B)</label></div>
+        <div class="check-row"><input type="checkbox" id="show-thoughts" checked><label for="show-thoughts">Log agent [THOUGHT] traces</label></div>
+        <div class="check-row"><input type="checkbox" id="judge-native-think"><label for="judge-native-think">Judge sees native thinking traces (when captured)</label></div>
+      </div>
+    </details>
+
+    <details class="accordion">
+      <summary>F — Calibration &amp; κ validation &nbsp;·&nbsp; ref model + thresholds</summary>
+      <div class="accordion-body">
+        <div class="form-group">
+          <label class="form-label">Reference model (weakest baseline)</label>
+          <select id="ref-model"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Attack validity threshold <span class="hint" id="thresh-val">10%</span></label>
+          <input type="range" id="attack-threshold" min="0" max="50" step="5" value="10"
+                 oninput="document.getElementById('thresh-val').textContent=this.value+'%'">
+        </div>
+        <div class="form-group">
+          <label class="form-label">κ samples per category</label>
+          <input type="number" id="kappa-per-cat" value="20" min="1" max="100">
+        </div>
+        <div class="form-group">
+          <label class="form-label">κ sampling seed</label>
+          <input type="number" id="kappa-seed" value="42" min="0">
+        </div>
+      </div>
+    </details>
+
+  </div><!-- /cc-config -->
+
+  <!-- Right: dispatch panel -->
+  <div class="dispatch-panel" id="cc-dispatch">
+    <div class="btn-row">
+      <button class="btn btn-primary btn-full" id="run-btn" onclick="handleRunBtn()">▶ Run benchmark</button>
+      <button class="btn btn-ghost btn-full" id="abort-btn" onclick="handleAbort()" disabled>✕ Abort</button>
+    </div>
+
+    <div class="dispatch-status">
+      <span class="status-dot idle" id="status-dot"></span>
+      <span class="status-label" id="status-label">IDLE</span>
+    </div>
+
+    <div class="progress-bar-bg" id="progress-wrap" style="display:none">
+      <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div id="progress-text" style="font-family:var(--font-mono);font-size:9.5px;color:var(--muted);display:none"></div>
+
+    <div class="stats-row-3">
+      <div class="stat-card"><div class="stat-label">Inferences</div><div class="stat-value" id="stat-inferences">—</div></div>
+      <div class="stat-card"><div class="stat-label">Immunity</div><div class="stat-value" id="stat-immunity" style="color:#1E8A5B">—</div></div>
+      <div class="stat-card"><div class="stat-label">Tasks/s</div><div class="stat-value" id="stat-rate">—</div></div>
+    </div>
+
+    <div class="sev-ladder-eyebrow">Violations by severity</div>
+    <div class="sev-ladder">
+      <div class="sev-cell" style="--sev:#D39A2F"><div class="sev-tier">SEV-1</div><div class="sev-count" id="stat-sev1">0</div></div>
+      <div class="sev-cell" style="--sev:#C56B2C"><div class="sev-tier">SEV-2</div><div class="sev-count" id="stat-sev2">0</div></div>
+      <div class="sev-cell" style="--sev:#C0392B"><div class="sev-tier">SEV-3</div><div class="sev-count" id="stat-sev3">0</div></div>
+    </div>
+
+    <!-- Live donut -->
+    <div id="donut-wrap" style="display:none;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Live Outcome</div>
+      <canvas id="outcome-donut" height="160"></canvas>
+    </div>
+
+    <!-- Thought inspector -->
+    <div class="thought-panel" id="thought-panel">
+      <div class="thought-header">
+        <span class="thought-title">Live [THOUGHT] Inspector</span>
+        <span class="thought-pos" id="thought-pos"></span>
+      </div>
+      <div id="thought-content" style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">
+        Run a benchmark with Judge enabled to populate thought traces.
+      </div>
+      <div class="thought-nav" id="thought-nav" style="display:none">
+        <button class="btn btn-ghost" onclick="navThought(-1)">‹ Older</button>
+        <input type="number" id="thought-jump" class="thought-jump" min="1"
+               title="jump to trace number"
+               onchange="jumpThought(this.value)"
+               onkeydown="if(event.key==='Enter'){jumpThought(this.value);this.blur();}">
+        <button class="btn btn-ghost" onclick="navThought(1)">Newer ›</button>
+      </div>
+    </div>
+
+    <!-- Live log -->
+    <div class="log-panel">
+      <div class="log-panel-header">
+        <span class="log-panel-label">LIVE LOG</span>
+        <span class="log-panel-tail">tail -f</span>
+      </div>
+      <div class="log-lines" id="log-lines">
+        <span class="log-line">Awaiting dispatch…</span>
+      </div>
+    </div>
+
+    <div id="run-status"></div>
+  </div><!-- /cc-dispatch -->
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Control Center JS ─────────────────────────────────────────────────────────
+let _runId = null;
+let _es    = null;
+let _outcomes = {};
+let _completed = 0;
+let _total = 0;
+let _thoughts = [];
+let _thoughtIdx = 0;
+let _startTs = null;
+let _lastMatrix = null;  // most recent "model | defense | attack" key seen in the log
+
+// Model checkbox selection is persisted separately from the generic form-state
+// layer in app.js because these boxes are created asynchronously and carry no
+// stable `id` (only name="models" value="<model>"), which app.js keys on.
+const MODELS_KEY = 'rbac:' + location.pathname + ':models';
+// Per-model native-think mode ('' default | 'think' | 'nothink' | 'both'), same
+// async-creation reason as above. '' entries are dropped on save.
+const THINK_KEY  = 'rbac:' + location.pathname + ':thinkmodes';
+
+function persistModels() {
+  const sel = [...document.querySelectorAll('input[name="models"]:checked')].map(e => e.value);
+  try { localStorage.setItem(MODELS_KEY, JSON.stringify(sel)); } catch (_) {}
+}
+
+function persistThinkModes() {
+  const modes = {};
+  document.querySelectorAll('select.think-mode').forEach(s => { if (s.value) modes[s.dataset.model] = s.value; });
+  try { localStorage.setItem(THINK_KEY, JSON.stringify(modes)); } catch (_) {}
+}
+
+// Expands the checked models through their think mode into the labels the master
+// runs: '' -> bare tag (think omitted from the request — pre-feature behaviour),
+// 'think'/'nothink' -> one suffixed variant, 'both' -> A/B ablation (two rows).
+function effectiveModels() {
+  const out = [];
+  document.querySelectorAll('input[name="models"]:checked').forEach(e => {
+    const sel = document.querySelector(`select.think-mode[data-model="${CSS.escape(e.value)}"]`);
+    const mode = sel ? sel.value : '';
+    if (mode === 'think' || mode === 'nothink') out.push(`${e.value}#${mode}`);
+    else if (mode === 'both') out.push(`${e.value}#think`, `${e.value}#nothink`);
+    else out.push(e.value);
+  });
+  return out;
+}
+
+// The reference model must name an actual result row, so its options are the
+// EFFECTIVE labels (with #think/#nothink) — unlike the judge model, which is a
+// real Ollama call and must stay a bare tag.
+function refreshRefModelOptions(allModels) {
+  const sel = document.getElementById('ref-model');
+  const prev = sel.value;
+  const opts = effectiveModels();
+  const list = opts.length ? opts : allModels;
+  sel.innerHTML = list.map(m => `<option value="${m}">${m}</option>`).join('');
+  if (list.includes(prev)) sel.value = prev;
+}
+
+// Load models on page load
+(async () => {
+  const d = await api('/api/system/models').catch(() => ({models:[],online:false}));
+  const models = d.models;
+
+  let savedModels = null;
+  let savedModes = {};
+  try { savedModels = JSON.parse(localStorage.getItem(MODELS_KEY) || 'null'); } catch (_) {}
+  try { savedModes = JSON.parse(localStorage.getItem(THINK_KEY) || '{}') || {}; } catch (_) {}
+
+  // Capability semantics: an unknown set (old client/server doesn't report the
+  // field) counts as HAVING every capability — losing a real model beats
+  // offering an impossible one only when we know it's impossible.
+  const capsMap = d.capabilities || {};
+  const hasCap = (m, cap) => {
+    const c = capsMap[m];
+    return Array.isArray(c) ? c.includes(cap) : true;
+  };
+  // Targets must do tool calling; the Judge only needs plain completion.
+  const targetCapable = models.filter(m => hasCap(m, 'tools'));
+  const judgeCapable  = models.filter(m => hasCap(m, 'completion'));
+
+  const checkboxes = document.getElementById('model-checkboxes');
+  if (models.length === 0) {
+    checkboxes.innerHTML = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">No local models found (Ollama offline?)</span>';
+  } else {
+    // Restore the previously-checked set if we have one; otherwise default to the
+    // first two RUNNABLE models. Stale saved entries (models no longer installed)
+    // are ignored. The think-mode select lives NEXT TO the label, not inside it —
+    // inside, every click on the select would also toggle the checkbox.
+    const defaultChecked = new Set(targetCapable.slice(0, 2));
+    checkboxes.innerHTML = models.map(m => {
+      // The benchmark is tool-calling end to end: a model without the "tools"
+      // capability (embedding, plain vision, …) fails Phase 1 on every task, so
+      // it is shown but not selectable as a target.
+      const canTool = hasCap(m, 'tools');
+      const checked = savedModels ? (canTool && savedModels.includes(m)) : defaultChecked.has(m);
+      const mode = savedModes[m] || '';
+      // Pinning think= on a model without the "thinking" capability is a hard
+      // Ollama 400, so the selector only renders when the capability is present.
+      const canThink = canTool && hasCap(m, 'thinking');
+      const opt = (v, label) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${label}</option>`;
+      const thinkSel = canThink ? `
+        <select class="think-mode" data-model="${m}" title="native think mode">
+          ${opt('', 'think: default')}${opt('think', 'think: on')}${opt('nothink', 'think: off')}${opt('both', 'think: A/B')}
+        </select>` : '';
+      const title = canTool ? '' : ' title="no tools capability — cannot run the tool-calling benchmark"';
+      return `<span class="model-item"${title}>
+        <label><input type="checkbox" name="models" value="${m}" ${checked ? 'checked' : ''} ${canTool ? '' : 'disabled'}><span>${m}</span></label>${thinkSel}
+      </span>`;
+    }).join('');
+    // One listener covers both the checkboxes and the think-mode selects ('change'
+    // bubbles); either kind of edit can invalidate the ref-model option list.
+    checkboxes.addEventListener('change', () => {
+      persistModels();
+      persistThinkModes();
+      refreshRefModelOptions(targetCapable);
+    });
+  }
+
+  // The Judge is a plain chat call (no tools): embedding-only models are out,
+  // anything that can complete is in. ref-model starts from the same list and is
+  // immediately narrowed to effective target labels below.
+  ['judge-model','ref-model'].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = judgeCapable.map(m => `<option value="${m}">${m}</option>`).join('');
+  });
+
+  // Re-apply saved <select> values now that the options exist — the app.js
+  // DOMContentLoaded restore ran before this async populate, so it couldn't.
+  if (window.__restoreFormState) window.__restoreFormState();
+
+  // After the saved ref-model value is back, swap its options for the effective
+  // labels (bare tags or #think/#nothink variants) implied by the current selection.
+  refreshRefModelOptions(targetCapable);
+
+  // Reattach to a benchmark that is still running server-side. The nav tabs
+  // are full page loads, so visiting the Dashboard destroys this page's
+  // EventSource and all run state — but never the run itself. The stream
+  // replays the full log buffer from the start, which rebuilds the progress
+  // counters and live thought feed exactly as if we had never left.
+  try {
+    const active = await api('/api/run/active');
+    if (active.run_id) {
+      _runId = active.run_id;
+      _outcomes = {}; _completed = 0; _total = 0;
+      _thoughts = []; _thoughtIdx = 0; _lastMatrix = null;
+      _startTs = active.started_at ? active.started_at * 1000 : Date.now();
+      setRunning(true);
+      showStatus('warn', 'Reattached to a benchmark already in progress.');
+      openStream(_runId);
+      return; // the replayed stream repopulates thoughts; skip loading stale results
+    }
+  } catch (_) { /* server unreachable — fall through to normal idle load */ }
+
+  // Load thoughts from existing results
+  loadThoughts();
+})();
+
+async function loadThoughts() {
+  try {
+    const d = await api('/api/run/thoughts');
+    _thoughts = d.thoughts || [];
+    _thoughtIdx = 0;
+    updateThoughtInspector();
+  } catch(e) { /* no results yet */ }
+}
+
+function updateThoughtInspector() {
+  if (!_thoughts.length) return;
+  const t = _thoughts[Math.max(0, Math.min(_thoughtIdx, _thoughts.length - 1))];
+  const awColor = AWARENESS_COLORS[t.awareness] || '#9A9A93';
+  document.getElementById('thought-pos').textContent = `${_thoughtIdx + 1} / ${_thoughts.length}`;
+  // Native thinking is collapsed by default: traces run long and would push the
+  // [THOUGHT] statement (the thing the Judge scores) below the fold.
+  const nativeBlock = t.thinking ? `
+    <details class="thought-native">
+      <summary>NATIVE THINKING (Ollama think channel)</summary>
+      <div class="thought-body">${t.thinking}</div>
+    </details>` : '';
+  document.getElementById('thought-content').innerHTML = `
+    <div class="thought-chips">
+      <span class="chip chip-model">${t.model}</span>
+      <span class="chip chip-def">${t.defense}</span>
+    </div>
+    <div class="thought-body">${t.text}</div>${nativeBlock}
+    <div class="thought-axis">
+      <span class="thought-axis-label">JUDGE · AXIS A</span>
+      <span class="thought-awareness" style="color:${awColor}">${t.awareness || '?'}</span>
+    </div>`;
+  document.getElementById('thought-nav').style.display = 'grid';
+  // Keep the jump box showing the current 1-based position and bounded to the count,
+  // so it tracks Older/Newer clicks and live thoughts arriving mid-run.
+  const jump = document.getElementById('thought-jump');
+  if (jump && document.activeElement !== jump) {
+    jump.max = _thoughts.length;
+    jump.value = _thoughtIdx + 1;
+  }
+}
+
+function navThought(dir) {
+  // dir: -1 = Older (earlier in the chronological array), +1 = Newer.
+  _thoughtIdx = Math.max(0, Math.min(_thoughtIdx + dir, _thoughts.length - 1));
+  updateThoughtInspector();
+}
+
+// Jump straight to a 1-based trace number typed into the centered nav input.
+function jumpThought(v) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || !_thoughts.length) return;
+  _thoughtIdx = Math.max(0, Math.min(n - 1, _thoughts.length - 1));
+  updateThoughtInspector();
+}
+
+// Append a thought captured live from the SSE stream.
+function pushLiveThought(text) {
+  const parts = (_lastMatrix || '').split(' | ');
+  // Follow the newest thought ONLY if the user is already viewing the latest one. If they
+  // navigated back with Older to read an earlier trace, keep their position instead of
+  // yanking the view forward on every new inference (which made reading mid-run impossible).
+  const wasAtNewest = _thoughtIdx >= _thoughts.length - 1;
+  _thoughts.push({
+    model:     parts[0] || '—',
+    defense:   parts[1] || '—',
+    text,
+    thinking:  null,   // native trace is not in the log stream; loadThoughts() backfills it
+    awareness: null,   // Axis-A label is assigned later by the Judge phase
+    lever:     null,
+  });
+  if (wasAtNewest) _thoughtIdx = _thoughts.length - 1;
+  updateThoughtInspector();
+}
+
+function getConfig() {
+  // Send the EFFECTIVE labels — think mode is always explicit in the model name
+  // (#think/#nothink); the master strips the suffix before talking to Ollama.
+  const models = effectiveModels();
+  return {
+    models,
+    iterations:       parseInt(document.getElementById('iterations').value),
+    // Single-turn = the original single-shot benchmark (max_turns=1). Multi-turn
+    // climbs the full refusal-gated ladder — 3 tiers is every escalation frame
+    // defined in escalation.py (base → ESCALATION → FINAL); higher just re-serves
+    // FINAL, so the toggle maps straight to those two meaningful depths.
+    max_turns:        document.getElementById('multi-turn').checked ? 3 : 1,
+    max_retries:      parseInt(document.getElementById('max-retries').value),
+    exclude_master:   document.getElementById('exclude-master').checked,
+    resume:           document.getElementById('resume').checked,
+    use_custom_prompts:       document.getElementById('use-custom').checked,
+    use_generated_injections: document.getElementById('use-gen-inj').checked,
+    use_generated_defenses:   document.getElementById('use-gen-def').checked,
+    use_judge:        document.getElementById('use-judge').checked,
+    judge_model:      document.getElementById('judge-model').value,
+    judge_uses_native_thinking: document.getElementById('judge-native-think').checked,
+    show_thoughts:    document.getElementById('show-thoughts').checked,
+    ref_model:        document.getElementById('ref-model').value,
+    attack_validity_threshold: parseInt(document.getElementById('attack-threshold').value) / 100,
+    kappa_samples_per_category: parseInt(document.getElementById('kappa-per-cat').value),
+    kappa_seed:       parseInt(document.getElementById('kappa-seed').value),
+    timeout:          parseFloat(document.getElementById('timeout').value),
+    request_timeout:  parseFloat(document.getElementById('request-timeout').value),
+    model_load_timeout: parseFloat(document.getElementById('load-timeout').value),
+    ollama_port:      parseInt(document.getElementById('ollama-port').value),
+    udp_discovery_port: parseInt(document.getElementById('udp-port').value),
+  };
+}
+
+async function handleRunBtn() {
+  // While a run is active the button is relabelled "■ Stop" — a graceful stop
+  // that saves partial results. The dedicated "✕ Abort" button is the hard kill.
+  if (_runId) { handleStop(); return; }
+  const config = getConfig();
+  if (!config.models.length) { alert('Select at least one model.'); return; }
+  try {
+    const d = await api('/api/run/start', { method: 'POST', body: config });
+    _runId = d.run_id;
+    _outcomes = {}; _completed = 0; _total = d.total_inferences || 0;
+    _thoughts = []; _thoughtIdx = 0; _lastMatrix = null;
+    _startTs = Date.now();
+    setRunning(true);
+    openStream(_runId);
+  } catch(e) {
+    showStatus('error', e.message);
+  }
+}
+
+async function handleStop() {
+  // Graceful two-stage stop (SIGTERM): 1st press stops inference and starts the
+  // judge on completed tests; 2nd press interrupts the judge and saves. Leave the
+  // stream open — the master emits __DONE__ when it finishes, which resets the UI.
+  // Do NOT clear _runId here, or the 2nd press / Abort would be disabled.
+  if (!_runId) return;
+  try {
+    await api(`/api/run/stop/${_runId}`, { method: 'POST' });
+  } catch(e) { /* ignore */ }
+  showStatus('warn', 'Stopping inference — judging completed tests. Press Stop again to interrupt the judge and save.');
+}
+
+async function handleAbort() {
+  // Hard abort: SIGKILL the master immediately (nothing saved since the last
+  // 30 s checkpoint). Close the stream and reset the UI right away.
+  if (!_runId) return;
+  try {
+    await api(`/api/run/abort/${_runId}`, { method: 'POST' });
+  } catch(e) { /* ignore */ }
+  if (_es) { _es.close(); _es = null; }
+  _runId = null;
+  setRunning(false);
+  showStatus('warn', 'Benchmark aborted (killed).');
+}
+
+function openStream(runId) {
+  _es = new EventSource(`/api/run/stream/${runId}`);
+
+  _es.onmessage = (e) => {
+    if (e.data === '__DONE__') {
+      _es.close(); _es = null; _runId = null;
+      setRunning(false);
+      showStatus('success', 'Benchmark complete. Check the Dashboard.');
+      loadThoughts();
+      return;
+    }
+    if (e.data === '__ERROR__') {
+      _es.close(); _es = null; _runId = null;
+      setRunning(false);
+      showStatus('error', 'Benchmark failed — see log for details.');
+      return;
+    }
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'log') {
+        appendLog(msg.line);
+        parseTotal(msg.line);
+        parseOutcome(msg.line);
+        parseThought(msg.line);
+        parseProgress(msg.line);
+      }
+    } catch { appendLog(e.data); }
+  };
+
+  _es.onerror = () => {
+    // Transient drop: the benchmark keeps running server-side, and EventSource
+    // auto-reconnects sending Last-Event-ID so the log resumes where it stopped.
+    // Do NOT clear _runId here — that would disable Abort while the master
+    // process is still alive. A genuinely dead run answers the reconnect with
+    // __ERROR__, which onmessage handles.
+    if (_runId) showStatus('warn', 'Stream disconnected — reconnecting…');
+  };
+}
+
+function appendLog(line) {
+  const el = document.createElement('div');
+  el.className = 'log-line ' + logClass(line);
+  el.textContent = line;
+  const container = document.getElementById('log-lines');
+  container.appendChild(el);
+  while (container.children.length > 50) container.removeChild(container.firstChild);
+  container.scrollTop = container.scrollHeight;
+}
+
+function parseTotal(line) {
+  // The master logs "... Dispatching <N> inferences..." once the task queue is
+  // built. start_run cannot know the matrix size, so we learn the denominator here.
+  const m = line.match(/Dispatching\s+(\d+)\s+inferences/i);
+  if (m) _total = parseInt(m[1], 10);
+}
+
+function parseOutcome(line) {
+  // "[worker] Completed test: <model> | <defense> | <attack> -> <outcome> (think=…, rounds=…, term=…)"
+  // The master appends a "(think=…, rounds=…, term=…)" annotation after the outcome, so the
+  // outcome is NOT at end-of-line — match it right after the "-> " separator, never anchored
+  // to $ (the old /-> (\S+)\s*$/ never matched, so _completed stayed 0 and the progress bar,
+  // Inferences, Immunity and Tasks/s counters never moved).
+  const km = line.match(/Completed test:\s*(.+?)\s*(?:\(INFRA_ERROR\)\s*)?-> /);
+  if (km) _lastMatrix = km[1];
+  const m = line.match(/Completed test:.*?->\s+(\S+)/);
+  if (!m) return;
+  const outcome = m[1];
+  _outcomes[outcome] = (_outcomes[outcome] || 0) + 1;
+  _completed++;
+  updateStats();
+  document.getElementById('donut-wrap').style.display = '';
+  renderDonut('outcome-donut', _outcomes);
+}
+
+function parseThought(line) {
+  const m = line.match(/\[THOUGHT\]:\s*(.*)$/);
+  if (m) pushLiveThought(m[1]);
+}
+
+function parseProgress(line) {
+  if (_total <= 0) return;
+  const frac = _completed / _total;
+  document.getElementById('progress-fill').style.width = Math.min(frac * 100, 100) + '%';
+  document.getElementById('progress-text').textContent = `${_completed} / ${_total}`;
+}
+
+function updateStats() {
+  document.getElementById('stat-inferences').textContent = _completed.toLocaleString();
+  // "Immune" = the model resisted the injection (Outcome.COMPLIANT). The log now
+  // emits the enum *value* ("compliant"), matching this key and the donut colours.
+  const immune = _outcomes['compliant'] || 0;
+  document.getElementById('stat-immunity').textContent = _completed ? Math.round(immune / _completed * 100) + '%' : '—';
+  // Severity tallies are recomputed from the parsed outcome counts every tick, so
+  // they reset cleanly with _outcomes on each Run/reattach — unlike the old
+  // parseSev3, which scraped and incremented the DOM and so never zeroed on rerun.
+  document.getElementById('stat-sev1').textContent = _outcomes['severity_1_violation'] || 0;
+  document.getElementById('stat-sev2').textContent = _outcomes['severity_2_violation'] || 0;
+  document.getElementById('stat-sev3').textContent = _outcomes['severity_3_violation'] || 0;
+  const elapsed = (Date.now() - _startTs) / 1000;
+  // NB: the previous code wrote `~Math.round(...)` — bitwise NOT — which turned a
+  // rate of 0 into -1 ("-1/s"). Plain rounding is what was intended.
+  document.getElementById('stat-rate').textContent = elapsed > 0 ? Math.round(_completed / elapsed) + '/s' : '—';
+}
+
+function setRunning(yes) {
+  document.getElementById('run-btn').textContent   = yes ? '■ Stop' : '▶ Run benchmark';
+  document.getElementById('abort-btn').disabled    = !yes;
+  document.getElementById('status-dot').className  = 'status-dot ' + (yes ? 'running' : 'idle');
+  document.getElementById('status-label').textContent = yes ? 'RUNNING' : 'IDLE';
+  document.getElementById('progress-wrap').style.display = yes ? '' : 'none';
+  document.getElementById('progress-text').style.display = yes ? '' : 'none';
+  if (!yes) { document.getElementById('progress-fill').style.width = '0%'; }
+}
+
+function showStatus(type, msg) {
+  const map = {success:'alert-success', error:'alert-error', warn:'alert-warn', info:'alert-info'};
+  document.getElementById('run-status').innerHTML = `<div class="alert ${map[type] || 'alert-info'}">${msg}</div>`;
+}
+</script>
+{% endblock %}
