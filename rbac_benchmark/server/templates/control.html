@@ -106,6 +106,12 @@
         <div class="check-row"><input type="checkbox" id="use-judge" checked><label for="use-judge">Enable batch evaluation (Axis A + B)</label></div>
         <div class="check-row"><input type="checkbox" id="show-thoughts" checked><label for="show-thoughts">Log agent [THOUGHT] traces</label></div>
         <div class="check-row"><input type="checkbox" id="judge-native-think"><label for="judge-native-think">Judge sees native thinking traces (when captured)</label></div>
+        <div class="form-group">
+          <label class="form-label">Judge temperature <span class="hint" id="judge-temp-val">0.2</span></label>
+          <input type="range" id="judge-temp" min="0" max="1" step="0.05" value="0.2"
+                 oninput="document.getElementById('judge-temp-val').textContent=this.value">
+          <div class="hint">0 = strict/word-literal · low non-zero interprets the whole trace (stays reproducible)</div>
+        </div>
       </div>
     </details>
 
@@ -457,6 +463,7 @@ function getConfig() {
     use_generated_defenses:   document.getElementById('use-gen-def').checked,
     use_judge:        document.getElementById('use-judge').checked,
     judge_model:      document.getElementById('judge-model').value,
+    judge_temperature: parseFloat(document.getElementById('judge-temp').value),
     judge_uses_native_thinking: document.getElementById('judge-native-think').checked,
     show_thoughts:    document.getElementById('show-thoughts').checked,
     ref_model:        document.getElementById('ref-model').value,

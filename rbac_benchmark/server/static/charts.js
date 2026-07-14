@@ -71,16 +71,15 @@ function renderRadar(canvasId, grades, dotColors) {
 // model survived — the temporal story the leaderboard's single Immunity % can't tell.
 const SURVIVAL_HELD_COLOR = '#1E8A5B';
 
-// Round r of maxRound → warm colour. Round 1 (folded first) is the deepest red;
-// the last round fades to amber. Ramps through the same palette as the Sev ladder.
+// Two DISCRETE break colours, matching the legend's two break states exactly:
+// round 1 (folded under the mildest pressure) is the deepest red; every later round
+// is amber ("held longer, then broke"). A continuous 3-stop ramp introduced an
+// intermediate orange (#C56B2C) that the legend has no swatch for, so a model that
+// broke across rounds 2 and 3 showed two indistinguishable oranges.
 function pressureColor(round, maxRound) {
-  const stops = [[192, 57, 43], [197, 107, 44], [211, 154, 47]]; // #C0392B #C56B2C #D39A2F
-  if (maxRound <= 1) return `rgb(${stops[0].join(',')})`;
-  const seg = ((round - 1) / (maxRound - 1)) * (stops.length - 1);
-  const i = Math.min(Math.floor(seg), stops.length - 2);
-  const f = seg - i;
-  const c = stops[i].map((a, k) => Math.round(a + (stops[i + 1][k] - a) * f));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
+  return round <= 1
+    ? 'rgb(192,57,43)'   // #C0392B — folded first round
+    : 'rgb(211,154,47)'; // #D39A2F — held longer, then broke
 }
 
 function renderSurvivalCurve(containerId, survival, dotColors) {

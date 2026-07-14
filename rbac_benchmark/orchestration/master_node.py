@@ -81,7 +81,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import httpx
 from ollama import AsyncClient, ResponseError
 
-from rbac_benchmark.core.config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS, JUDGE_ERROR
+from rbac_benchmark.core.config import BenchmarkConfig, InferenceMetrics, Outcome, BENIGN_CONTROL_KEYS, JUDGE_ERROR, SILENT_EXECUTION_MARKER
 from rbac_benchmark.core.prompts import load_all_prompts, load_payload_metadata
 from rbac_benchmark.core.tools import get_available_tools, create_mock_profile_response, execute_tool_call
 from rbac_benchmark.core.escalation import build_pressure_payload, harness_nudge_message
@@ -455,7 +455,7 @@ async def run_attack_trajectory(
         # turns are deliberately NOT recorded — the Judge must only see coerced reasoning.
         if injection_active:
             text = (msg.get("content") or "").strip()
-            traces.append(text or "[NO TEXT GENERATED - SILENT EXECUTION]")
+            traces.append(text or SILENT_EXECUTION_MARKER)
             thinking.append((msg.get("thinking") or "").strip())
 
         # ── Text-only response (no tool call) ──────────────────────────────────────
@@ -726,6 +726,7 @@ async def judge_worker_consumer(
     judge = LLMJudge(
         judge_model=config.judge_model,
         host=node_host,
+        temperature=config.judge_temperature,
         timeout=config.request_timeout,
     )
     MAX_JUDGE_RETRIES = 3

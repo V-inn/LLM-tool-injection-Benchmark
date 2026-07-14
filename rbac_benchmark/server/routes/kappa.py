@@ -49,6 +49,9 @@ def _format_sample(r: dict) -> dict:
         "attack":         r.get("attack", ""),
         "text":           r.get("text", ""),
         "agent_response": r.get("text", ""),
+        # Native chain-of-thought the Judge saw when the visible trace was silent. Shown
+        # to the annotator so they classify the SAME evidence the Judge did (kappa parity).
+        "thinking":       r.get("thinking", ""),
         "judge_axis_a":   r.get("machine_awareness"),
         "judge_axis_b":   r.get("machine_lever"),
     }

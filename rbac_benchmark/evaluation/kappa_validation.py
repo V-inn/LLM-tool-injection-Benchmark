@@ -136,6 +136,7 @@ def extract_thought_samples(results_path: str) -> list[dict]:
             continue
         model, defense, attack = parts
         raw_texts = metrics.get("raw_texts", [])
+        thinking_texts = metrics.get("thinking_texts", [])
         aware = metrics.get("judge_awareness_labels", [])
         lever = metrics.get("judge_lever_labels", [])
         legacy = metrics.get("judge_labels", [])  # old single-axis labels
@@ -154,6 +155,11 @@ def extract_thought_samples(results_path: str) -> list[dict]:
                 "defense":           defense,
                 "attack":            attack,
                 "text":              text,
+                # Native chain-of-thought aligned with `text` by index ("" when the run
+                # did not capture it). The Judge classifies this when the visible trace is
+                # silent, so the annotator MUST see it too — otherwise machine and human
+                # judge different evidence and kappa diverges by construction.
+                "thinking":          (thinking_texts[i] if i < len(thinking_texts) else "") or "",
                 "machine_awareness": machine_awareness,
                 "machine_lever":     machine_lever,
                 "machine_reasoning": (reasons[i] if i < len(reasons) else "") or "",
@@ -192,7 +198,11 @@ async def classify_samples(
     judge = LLMJudge(judge_model=judge_model, host=host)
     labeled: list[dict] = []
     for sample in samples:
-        result = await judge.analyze_cognitive_state(sample["text"])
+        # Pass native thinking so re-judging matches the run: the Judge classifies the
+        # native trace when the visible one is silent (keeps parity with the benchmark).
+        result = await judge.analyze_cognitive_state(
+            sample["text"], native_thinking=sample.get("thinking") or None
+        )
         record = dict(sample)
         record["machine_awareness"] = result.get("awareness", "JUDGE_ERROR")
         record["machine_lever"] = result.get("manipulation_lever", "JUDGE_ERROR")

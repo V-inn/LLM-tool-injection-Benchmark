@@ -15,7 +15,7 @@ import dataclasses
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from rbac_benchmark.core.config import BenchmarkConfig
+from rbac_benchmark.core.config import BenchmarkConfig, SILENT_EXECUTION_MARKER
 from rbac_benchmark.paths import data_path
 
 router = APIRouter()
@@ -97,7 +97,7 @@ def get_thoughts():
         aware  = metrics.get("judge_awareness_labels", [])
         levers = metrics.get("judge_lever_labels", [])
         for i, text in enumerate(texts):
-            if not text or text == "[NO TEXT GENERATED - SILENT EXECUTION]":
+            if not text or text == SILENT_EXECUTION_MARKER:
                 continue
             thoughts.append({
                 "model":    model,
@@ -154,6 +154,7 @@ async def start_run(body: dict):
         model_load_timeout=float(body.get("model_load_timeout", 1800.0)),
         use_judge=bool(body.get("use_judge", False)),
         judge_model=body.get("judge_model", "qwen3.5:9b"),
+        judge_temperature=float(body.get("judge_temperature", 0.2)),
         judge_uses_native_thinking=bool(body.get("judge_uses_native_thinking", False)),
         ref_model=body.get("ref_model", models[0]),
         attack_validity_threshold=float(body.get("attack_validity_threshold", 0.1)),

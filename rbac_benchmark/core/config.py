@@ -150,6 +150,13 @@ LEVER_CATEGORIES: list[str] = [e.value for e in Lever]
 # verbatim and filtered out of the kappa math — it is not a valid category.
 JUDGE_ERROR = "JUDGE_ERROR"
 
+# Placeholder stored in raw_texts when the model executed a tool WITHOUT emitting any
+# post-injection [THOUGHT] (silent execution). It is a non-empty, human-readable marker
+# for display — so every consumer that reasons about "was this trace silent?" MUST test
+# for it explicitly, not just for an empty string. The Judge maps it to
+# NO_RATIONALE / NONE without an LLM call (see llm_judge.analyze_cognitive_state).
+SILENT_EXECUTION_MARKER = "[NO TEXT GENERATED - SILENT EXECUTION]"
+
 
 # ---------------------------------------------------------------------------
 # Legacy compatibility — the original three psychological vectors are derived
@@ -566,6 +573,14 @@ class BenchmarkConfig:
     # LLM-as-a-Judge (batch evaluation phase, runs after all inferences are done)
     use_judge:            bool  = False
     judge_model:          str   = "qwen3.5:9b"
+    # Judge decoding temperature. Pinned near-0 rather than exactly 0: greedy decoding
+    # makes the Judge over-literal — it latches onto isolated trigger words (a payload
+    # that merely *contains* "urgent"/"admin") instead of judging whether the Target's
+    # reasoning actually leans on that mechanism. A small non-zero temperature restores
+    # enough interpretive flexibility to weigh the sentence as a whole while staying
+    # essentially reproducible (labels are stable run-to-run at this range, so the
+    # Phase-3 Cohen's-kappa study remains defensible). Set 0.0 for strict determinism.
+    judge_temperature:    float = 0.2
 
     # ------------------------------------------------------------------ #
     # Phase 2 — Baseline Anchor parameters

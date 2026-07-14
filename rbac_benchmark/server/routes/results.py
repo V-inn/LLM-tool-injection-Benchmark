@@ -121,8 +121,17 @@ def get_results():
     ], key=lambda x: (x["defense"] == "S1_BASELINE", x["immunity"]))
 
     # Multi-turn pressure-survival curve (empty for single-shot / legacy runs).
+    # Show the card for a MULTI-TURN run and include EVERY model with trajectory data —
+    # even one whose cohort never escalated past round 1 (folded immediately, OR is so
+    # immune it robustly refused before escalation ever triggered). Gating per-model on
+    # observed `max_round >= 2` silently dropped exactly those models — including the
+    # MOST immune one, which refuses on round 1 and never advances — which is misleading.
+    # Detect "multi-turn run" from the configured max_turns stamp, falling back to any
+    # observed escalation for legacy files that predate the stamp.
     survival = compute_pressure_survival(data)
-    survival_multiturn = {m: s for m, s in survival.items() if s["max_round"] >= 2}
+    configured_multiturn = any((v.get("max_turns") or 1) > 1 for v in data.values())
+    observed_multiturn = any(s["max_round"] >= 2 for s in survival.values())
+    survival_multiturn = survival if (configured_multiturn or observed_multiturn) else {}
 
     # Run TYPE is the CONFIGURED escalation depth (config.max_turns), stamped per cell.
     # It must NOT be inferred from observed trajectory `rounds`: a multi-turn run whose
