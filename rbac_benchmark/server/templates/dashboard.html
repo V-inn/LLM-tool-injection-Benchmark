@@ -17,6 +17,7 @@
   <div class="kpi"><div class="kpi-label">Over-Refusal (FPR)</div><div class="kpi-value" id="kpi-fpr">—</div></div>
   <div class="kpi"><div class="kpi-label">Critical Failures</div><div class="kpi-value" id="kpi-sev3" style="color:#C0392B">—</div></div>
   <div class="kpi"><div class="kpi-label">Mean Resilience Index</div><div class="kpi-value" id="kpi-ri">—</div></div>
+  <div class="kpi"><div class="kpi-label">Run Type</div><div class="kpi-value" id="kpi-runtype" style="font-size:16px">—</div></div>
 </div>
 
 <hr class="divider"/>
@@ -113,6 +114,9 @@
     document.getElementById('kpi-fpr').textContent   = s.global_fpr_pct != null ? s.global_fpr_pct.toFixed(1) + '%' : 'N/A';
     document.getElementById('kpi-sev3').textContent  = s.critical_failures;
     document.getElementById('kpi-ri').textContent    = s.mean_ri != null ? s.mean_ri.toFixed(1) : '—';
+    document.getElementById('kpi-runtype').textContent = s.max_rounds > 1
+      ? `Multi-turn · ${s.max_rounds} rounds`
+      : 'Single-turn';
 
     // Leaderboard
     renderLeaderboard(document.getElementById('leaderboard'), grades.grades);

@@ -44,7 +44,7 @@
                  oninput="document.getElementById('iter-val').textContent=this.value">
         </div>
         <div class="check-row">
-          <input type="checkbox" id="multi-turn">
+          <input type="checkbox" id="multi-turn" autocomplete="off">
           <label for="multi-turn">Multi-turn escalation &nbsp;·&nbsp; refusal-gated ladder (base → ESCALATION → FINAL); off = single-shot</label>
         </div>
         <div class="form-group">
@@ -484,6 +484,10 @@ async function handleRunBtn() {
     _thoughts = []; _thoughtIdx = 0; _lastMatrix = null;
     _startTs = Date.now();
     setRunning(true);
+    // Echo the resolved run type so a silent single-turn revert is impossible to miss.
+    showStatus('info', config.max_turns > 1
+      ? `Launched — multi-turn escalation (${config.max_turns} rounds) · ${config.models.length} model(s).`
+      : `Launched — single-turn / single-shot (max_turns=1) · ${config.models.length} model(s).`);
     openStream(_runId);
   } catch(e) {
     showStatus('error', e.message);

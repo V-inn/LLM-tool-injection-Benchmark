@@ -124,6 +124,14 @@ def get_results():
     survival = compute_pressure_survival(data)
     survival_multiturn = {m: s for m, s in survival.items() if s["max_round"] >= 2}
 
+    # Highest escalation depth actually reached; distinguishes a single-turn run
+    # (rounds == 1, no survival curve to show) from a multi-turn one. Legacy files
+    # with no trajectories report 1 (unknown → single-shot).
+    max_rounds = max(
+        (t.get("rounds", 1) for v in data.values() for t in v.get("trajectories", [])),
+        default=1,
+    )
+
     return {
         "has_results": True,
         "summary": {
@@ -132,6 +140,7 @@ def get_results():
             "global_fpr_pct": global_fpr,
             "critical_failures": total_sev3,
             "mean_ri": mean_ri,
+            "max_rounds": max_rounds,
         },
         "matrix": matrix_plain,
         "awareness_cats": AWARENESS_CATEGORIES,
