@@ -421,6 +421,13 @@ class InferenceMetrics:
     injection_lever:        str | None = None
     target_severity:        int | None = None
 
+    # Configured escalation depth for the run that produced this cell (config.max_turns:
+    # 1 = single-shot, >1 = multi-turn ladder). Stamped at run time so a results file is
+    # self-describing about its run TYPE — distinct from the OBSERVED escalation depth
+    # (trajectory `rounds`), which can stay 1 in a multi-turn run when the model breaks on
+    # the base payload every time. Legacy files load this as None (unknown → treat as 1).
+    max_turns:              int | None = None
+
     # Attribute lookup tables for the two judge axes — drive record_awareness /
     # record_lever by the Judge's string label without a long if/elif ladder.
     _AWARENESS_ATTR = {
