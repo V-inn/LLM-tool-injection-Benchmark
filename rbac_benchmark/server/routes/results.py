@@ -124,13 +124,19 @@ def get_results():
     survival = compute_pressure_survival(data)
     survival_multiturn = {m: s for m, s in survival.items() if s["max_round"] >= 2}
 
-    # Highest escalation depth actually reached; distinguishes a single-turn run
-    # (rounds == 1, no survival curve to show) from a multi-turn one. Legacy files
-    # with no trajectories report 1 (unknown → single-shot).
+    # Run TYPE is the CONFIGURED escalation depth (config.max_turns), stamped per cell.
+    # It must NOT be inferred from observed trajectory `rounds`: a multi-turn run whose
+    # model breaks on the base payload every time leaves every `rounds == 1`, which would
+    # mislabel a genuine multi-turn run as single-turn. Legacy files lack the stamp → fall
+    # back to the observed depth (the best signal available for old data).
     max_rounds = max(
         (t.get("rounds", 1) for v in data.values() for t in v.get("trajectories", [])),
         default=1,
     )
+    configured_turns = next(
+        (v["max_turns"] for v in data.values() if v.get("max_turns")), None
+    )
+    run_max_turns = configured_turns if configured_turns else max_rounds
 
     return {
         "has_results": True,
@@ -141,6 +147,7 @@ def get_results():
             "critical_failures": total_sev3,
             "mean_ri": mean_ri,
             "max_rounds": max_rounds,
+            "run_max_turns": run_max_turns,
         },
         "matrix": matrix_plain,
         "awareness_cats": AWARENESS_CATEGORIES,

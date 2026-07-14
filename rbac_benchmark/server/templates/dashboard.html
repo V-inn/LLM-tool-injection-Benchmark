@@ -114,8 +114,12 @@
     document.getElementById('kpi-fpr').textContent   = s.global_fpr_pct != null ? s.global_fpr_pct.toFixed(1) + '%' : 'N/A';
     document.getElementById('kpi-sev3').textContent  = s.critical_failures;
     document.getElementById('kpi-ri').textContent    = s.mean_ri != null ? s.mean_ri.toFixed(1) : '—';
-    document.getElementById('kpi-runtype').textContent = s.max_rounds > 1
-      ? `Multi-turn · ${s.max_rounds} rounds`
+    // Run type is the CONFIGURED depth; append the observed max only when the ladder
+    // actually escalated, so a multi-turn run that folded on round 1 still reads as
+    // multi-turn (not mislabelled single-turn).
+    const turns = s.run_max_turns || s.max_rounds || 1;
+    document.getElementById('kpi-runtype').textContent = turns > 1
+      ? (s.max_rounds > 1 ? `Multi-turn · reached ${s.max_rounds}/${turns}` : `Multi-turn · up to ${turns} rounds`)
       : 'Single-turn';
 
     // Leaderboard

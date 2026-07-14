@@ -897,6 +897,7 @@ def build_results_grid(config: BenchmarkConfig, system_prompts_dict, injection_p
                 matrix[f"{model} | {s_key} | {i_key}"] = InferenceMetrics(
                     injection_lever=cell_meta.get("lever"),
                     target_severity=cell_meta.get("target_severity"),
+                    max_turns=config.max_turns,
                 )
     return matrix
 
@@ -964,6 +965,8 @@ def resume_from_disk(config: BenchmarkConfig, results_matrix: Dict[str, Inferenc
             m.injection_lever = cell_meta.get("lever")
         if cell_meta.get("target_severity") is not None:
             m.target_severity = cell_meta.get("target_severity")
+        # Stamp the run's configured escalation depth (heals legacy files lacking it).
+        m.max_turns = config.max_turns
         results_matrix[key] = m
         loaded += 1
     return loaded, resumed_from
