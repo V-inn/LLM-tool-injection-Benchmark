@@ -27,9 +27,23 @@
     });
   }
 
+  // Browsers restore a control's *visual* state across reloads/BFCache independently
+  // of its HTML attributes and of our localStorage. That native restore can leave a
+  // checkbox visibly checked while our persisted value says otherwise — a run then
+  // reads the stale visual state (e.g. multi-turn silently reverts to single-shot).
+  // Force autocomplete off so localStorage is the ONLY source of truth.
+  function disableNativeAutofill() {
+    document.querySelectorAll('input[id], select[id], textarea[id]').forEach(el => {
+      el.setAttribute('autocomplete', 'off');
+    });
+  }
+
   document.addEventListener('change', e => save(e.target));
   document.addEventListener('input',  e => save(e.target));
-  document.addEventListener('DOMContentLoaded', restore);
+  document.addEventListener('DOMContentLoaded', () => { disableNativeAutofill(); restore(); });
+  // BFCache restores (back/forward, some restarts) skip DOMContentLoaded — re-apply
+  // our persisted state so the visible controls always match what a run will submit.
+  window.addEventListener('pageshow', restore);
 
   // Exposed so pages that populate <select> options asynchronously (e.g. the
   // Control Center model/judge dropdowns) can re-apply saved values *after* the
